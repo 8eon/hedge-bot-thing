@@ -1,0 +1,36 @@
+services:
+  hedge-bot:
+    image: hummingbot/hummingbot:version-2.13.0
+    container_name: hedge-bot
+
+    # linux/amd64 image only — runs via Rosetta 2 on Apple Silicon.
+    # Docker Desktop handles this transparently; expect a platform warning on pull.
+    platform: linux/amd64
+
+    environment:
+      # Hummingbot encrypts its config files at rest with this password.
+      # Fine to keep simple for paper trading. Change before live deployment.
+      - CONFIG_PASSWORD=dev
+      # Makes our src/ package importable as `from src.core...` etc.
+      - PYTHONPATH=/home/hummingbot
+
+    volumes:
+      # Strategy code — mounted from our repo so edits are live immediately.
+      - ./scripts:/home/hummingbot/scripts
+      - ./controllers:/home/hummingbot/controllers
+      - ./src:/home/hummingbot/src
+
+      # Config, logs, and runtime data — persisted on the host.
+      - ./conf:/home/hummingbot/conf
+      - ./logs:/home/hummingbot/logs
+      - ./data:/home/hummingbot/data
+
+    # Required for Hummingbot's interactive CLI to work correctly.
+    tty: true
+    stdin_open: true
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"

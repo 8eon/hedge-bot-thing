@@ -15,9 +15,6 @@ dependencies = [
     "scikit-learn>=1.4",
     "pandas>=2.2",
 
-    # Hummingbot integration
-    "hummingbot>=2.0",
-
     # Configuration
     "pydantic>=2.6",
 ]

@@ -16,10 +16,11 @@ conf/scripts/*.yml
 conf/*.yml
 !conf/scripts/*.yml.example
 
-# Logs and trade data
+# Runtime directories populated by Docker / Hummingbot
 logs/
-*.log
 data/
+certs/
+*.log
 
 # ML artifacts
 models/*.pkl
