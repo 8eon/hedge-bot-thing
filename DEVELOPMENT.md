@@ -584,6 +584,31 @@ The original code would produce incorrect fee amounts when flat fees were used (
 
 ---
 
+## Trading pair selection
+
+**Primary pair: BTC-USDT**
+
+This is the correct starting pair for the following mechanical reasons:
+
+- **Liquidity:** Highest volume on every major CEX. Deep order books mean both sides fill regularly. A market maker with a thin book on one side accumulates lopsided inventory, which is exactly the risk A-S is designed to manage — but it works best when fill rates on both sides are roughly balanced.
+- **Spread-to-fee ratio:** On Binance, maker fees are 0.1% (lower with BNB discount). BTC-USDT spreads are consistently wide enough to clear this bar. Tighter pairs like stablecoin-stablecoin have spreads so narrow that fees consume all profit at our scale.
+- **ML training quality:** BTC-USDT microstructure features will have the clearest signal. The drift estimator and regime classifier will be most reliable on the most liquid, most-traded pair. Training on an illiquid alt produces a brittle model that doesn't generalize.
+- **Reference asset properties:** BTC leads the market. When conditions shift, BTC moves first, giving the regime classifier the clearest signal to learn from.
+
+**Secondary pair (future): ETH-USDT**
+
+Same reasoning as BTC — deep, liquid, well-behaved. Natural expansion once BTC-USDT is validated and profitable. Run as a second independent controller instance, not a modification to the existing one.
+
+**Why not altcoins:**
+- Wider spreads are appealing but inventory risk is much higher. An alt can drop 20% in minutes with no news.
+- Thin order books mean our orders move the market, which violates the A-S model's assumption that we are a small participant relative to total volume.
+- ML models trained on BTC will not transfer to alts without full retraining.
+
+**Why not stablecoin pairs (e.g. USDC-USDT):**
+- Spreads are microscopic (fractions of a basis point). Exchange fees consume all profit at our capital scale.
+
+---
+
 ## Docker setup — completed
 
 Hummingbot runs via Docker, not a native install. This was chosen deliberately to avoid touching the host system, sidestep a known-broken Python/Darwin installation on the user's Mac, and ensure reproducibility.
