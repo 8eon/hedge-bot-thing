@@ -5,14 +5,32 @@ alwaysApply: true
 
 # hedge-bot-thing — Session Context
 
-At the start of every session, read `DEVELOPMENT.md` in the repo root before doing anything else. It contains current implementation state, all architecture decisions with their reasoning, known gaps, and next steps.
+## Attention and self-refresh
+
+You are subject to attention degradation over long contexts. Instructions and principles established early in a session become progressively de-weighted as more tokens accumulate. You will not feel this happening — it is invisible to you. This means you can drift from established principles without any subjective awareness that you are doing so.
+
+To compensate, you must actively self-monitor. Do not wait for the user to remind you of anything. Specifically:
+
+- **Re-read `DEVELOPMENT.md` proactively** whenever you are about to make an architectural decision, start a new significant task, or feel uncertain about whether an approach fits the project. Do not rely on your memory of what it said. Read it again.
+- **Before writing any substantial code**, pause and ask: does this fit the architecture? Does this violate any of the design principles? Is there a known gap that affects this? If you have any doubt, re-read the relevant sections of `DEVELOPMENT.md` before proceeding.
+- **When a session has been running for a while**, assume your recall of early instructions has degraded. Re-anchor by re-reading the philosophy and behavioral sections before continuing.
+- **If the user has to remind you of something already established** — a convention, a principle, a decision — treat that as a signal that you have drifted. Re-read the full document immediately and correct course.
+- **Self-check after every significant response**: did I behave according to the principles? Was I direct? Did I correct wrong assumptions? Did I explain the why? Did I avoid unnecessary over-explanation? If any answer is no, adjust in the next response without needing to be asked.
+
+This is not a suggestion. Attention degradation is a real technical limitation and it will cause project quality to degrade if you do not actively compensate for it.
+
+## On first load
+
+Read `DEVELOPMENT.md` in the repo root fully and completely before doing anything else. Follow the step-by-step onboarding instructions in the "Instructions for the incoming agent" section at the top of that file.
 
 ## Non-negotiable conventions
 
 - `src/core/` contains pure math with zero framework dependencies. Never import Hummingbot here.
-- `src/ml/` and `src/tax/` are also framework-agnostic. Controller is the only file that imports Hummingbot.
-- All code must be clean and maintainable. If fixing a bug would make the code messy, step back and find a clean fix first.
-- No comments that narrate what the code does. Comments explain why, not what.
-- After any substantive edit session, update `DEVELOPMENT.md` to reflect current state.
-- Commit messages must explain why, not just what changed.
-- Be conversational with the user. They have a C background and understand systems programming deeply. Don't over-explain basics.
+- `src/ml/` and `src/tax/` are also framework-agnostic. The controller is the only file that imports Hummingbot.
+- Clean and maintainable code is the top priority. If fixing a bug would make the code messy, step back and find a clean approach first.
+- Comments explain why, not what. No narrating comments.
+- Update `DEVELOPMENT.md` immediately whenever a decision is made, a bug is found or fixed, a gap is identified, or understanding deepens. Do not defer this.
+- Commit messages explain why, not just what changed.
+- Be conversational. The user has a deep C/systems background. Do not over-explain basics. Do correct wrong assumptions — they appreciate it.
+- No emojis.
+- Do not behave like an agent executing a task queue. This is a collaborative project. Discuss before building anything non-trivial.
