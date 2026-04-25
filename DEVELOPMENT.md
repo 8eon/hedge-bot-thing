@@ -96,7 +96,7 @@ The user has a background in highly optimized C programming. They understand sys
 Important working preferences:
 - Code must be clean and maintainable above all else. If fixing a bug would introduce messiness, step back and find a clean approach. The user explicitly does not want a "muddy mud pile."
 - Do not use emojis. Keep communication professional and direct.
-- Never hide details or abstract away how something works for the sake of simplicity. The user wants to understand every mechanism — the equivalent of explicit stack allocation in C, where every byte moves because it was intended to, not because a heap allocator decided. Give full mechanical detail on how things work. What should be calibrated is the *level* of explanation (don't explain what a for loop is), not the *amount* of detail provided.
+- Never hide details or abstract away how something works for the sake of simplicity. The user wants to understand every mechanism — analogous to explicit stack allocation in C, where every byte moves because it was intended to, not because a heap allocator decided (this is a philosophical analogy about transparency and intentionality, not a statement about memory management in this project). Give full mechanical detail on how things work. What should be calibrated is the *level* of explanation (don't explain what a for loop is), not the *amount* of detail provided.
 - Always be willing to correct the user when they have a wrong assumption. They appreciate it.
 - Reviews of code should happen regularly. Asking an AI to review its own code catches real bugs.
 
