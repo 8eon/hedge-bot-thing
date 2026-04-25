@@ -584,17 +584,61 @@ The original code would produce incorrect fee amounts when flat fees were used (
 
 ---
 
+## Docker setup — completed
+
+Hummingbot runs via Docker, not a native install. This was chosen deliberately to avoid touching the host system, sidestep a known-broken Python/Darwin installation on the user's Mac, and ensure reproducibility.
+
+**Key facts about the Docker setup:**
+- Image: `hummingbot/hummingbot:version-2.13.0` (pinned, not `latest`)
+- Platform: `linux/amd64` — runs via Rosetta 2 on Apple Silicon. Docker Desktop handles this transparently. You will see a platform mismatch warning on pull; this is expected and harmless.
+- `docker-compose.yml` is in the repo root. All configuration is there.
+- `CONFIG_PASSWORD=dev` is set in the compose file. Hummingbot encrypts its config files at rest and will prompt for this on first start.
+- `PYTHONPATH=/home/hummingbot` is set so `from src.core...`, `from src.ml...`, `from src.tax...` all resolve inside the container.
+
+**Volume mounts — how our code gets into the container:**
+```
+./scripts     → /home/hummingbot/scripts      (Hummingbot finds hedge_bot.py here)
+./controllers → /home/hummingbot/controllers  (Hummingbot finds the controller here)
+./src         → /home/hummingbot/src          (our library code, importable via PYTHONPATH)
+./conf        → /home/hummingbot/conf         (strategy YAML config files)
+./logs        → /home/hummingbot/logs         (trade logs, Hummingbot logs)
+./data        → /home/hummingbot/data         (Hummingbot's SQLite state)
+```
+All edits to source files in the repo are immediately live in the container — no rebuild needed.
+
+**How to run:**
+```bash
+# Copy the example config first (only needed once)
+cp conf/scripts/conf_hedge_bot_1.yml.example conf/scripts/conf_hedge_bot_1.yml
+
+# Start the interactive Hummingbot CLI
+docker compose run --rm hedge-bot
+```
+`--rm` cleans up the container on exit. All persistent state lives in the mounted volumes, not the container, so nothing is lost.
+
+Inside Hummingbot, to start the strategy:
+```
+start --v2 conf/scripts/conf_hedge_bot_1.yml
+```
+
+**Docker Desktop note for the user's machine:**
+The user's Docker Desktop was previously running Open WebUI and related containers in a restart loop, consuming all CPU/RAM. Those have been fully cleaned out. Docker is now empty. The Hummingbot image pull (`docker compose pull`) was in progress at the end of the last session and may need to be re-run if it did not complete.
+
+---
+
 ## Immediate next steps (in priority order)
 
-1. **Write unit tests for `src/core/avellaneda_stoikov.py`.** This is the highest priority. The variance_term bug should have been caught by a test. Tests in `tests/core/test_avellaneda_stoikov.py`.
+1. **Complete the Docker image pull** if it did not finish. Run `docker compose pull` from the repo root. The image is ~1.5GB. Expect a platform warning (amd64 on arm64) — this is normal.
 
-2. **Install Hummingbot and test paper trading connectivity.** Follow the Hummingbot V2 install guide. Configure for Binance paper trade. Run the hedge_bot script and confirm orders are placed.
+2. **Copy the config and do the first run.** `cp conf/scripts/conf_hedge_bot_1.yml.example conf/scripts/conf_hedge_bot_1.yml` then `docker compose run --rm hedge-bot`. The goal of this first run is simply to see what Hummingbot looks like and whether the script loads without import errors.
 
-3. **Verify executor lifecycle and implement order cancellation.** Read `executors_info` in a running V2 strategy. Implement `StopExecutorAction` for stale executors before creating new ones.
+3. **Resolve script wiring in `scripts/hedge_bot.py`.** The current file is a stub. Look at Hummingbot's `v2_with_controllers.py` example inside the running container at `/home/hummingbot/scripts/` to see the canonical V2 controller wiring pattern, then replicate it.
 
-4. **Verify `on_order_filled` and fix fill capture if needed.** Place a paper trade manually and confirm whether the fill reaches `on_order_filled` on the controller.
+4. **Verify executor lifecycle and implement order cancellation.** This is the critical architectural gap. Read the executor API from inside a running strategy, then implement `StopExecutorAction` for stale orders before creating new ones in `determine_executor_actions`.
 
-5. **Complete `scripts/hedge_bot.py` wiring** once the V2 controller-to-script pattern is confirmed.
+5. **Verify `on_order_filled` fires on the controller.** Place a paper trade and check logs. If it doesn't fire, capture fills via the executor state or event bus instead.
+
+6. **Write unit tests for `src/core/avellaneda_stoikov.py`** — the variance_term bug was caught by review, not tests. Tests would catch it first next time.
 
 ---
 
@@ -602,4 +646,4 @@ The original code would produce incorrect fee amounts when flat fees were used (
 
 | Date | What happened |
 |---|---|
-| 2026-04-25 | Initial project. Discussed market making vs directional trading, A-S vs Black-Scholes, ML architecture, stablecoins/inventory, CEX vs DEX, Python performance. Implemented all Phase 1 files. Code review found and fixed: variance_term unit bug (critical), _interval_to_seconds silent fallback, unused imports (TrailingStop, field, Optional, dead dataclasses.replace), silent inventory exception, wrong fee extraction, wrong pyproject.toml build backend, removed scipy and jinja2 from core deps. Identified order cancellation gap and on_order_filled uncertainty. Created DEVELOPMENT.md and Cursor rules for session continuity. |
+| 2026-04-25 | Initial project. Discussed market making vs directional trading, A-S vs Black-Scholes, ML architecture, stablecoins/inventory, CEX vs DEX, Python performance. Implemented all Phase 1 files. Code review found and fixed: variance_term unit bug (critical), _interval_to_seconds silent fallback, unused imports, silent inventory exception, wrong fee extraction, wrong pyproject.toml build backend, removed scipy and jinja2 from core deps. Identified order cancellation gap and on_order_filled uncertainty. Created DEVELOPMENT.md and Cursor rules for session continuity. Added Docker setup (docker-compose.yml, volume mounts, PYTHONPATH). Cleaned Docker Desktop of all previous containers/images. Hummingbot image pull started but may not have completed at session end — re-run `docker compose pull` to confirm. |
