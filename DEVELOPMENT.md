@@ -584,6 +584,62 @@ The original code would produce incorrect fee amounts when flat fees were used (
 
 ---
 
+## Long-term vision and business strategy
+
+### Realistic return expectations
+
+Target: 20-40% annually on deployed capital. This is exceptional by any normal investment standard (S&P 500 averages ~10%/year) and achievable with a well-implemented market making + funding rate arbitrage combination in normal market conditions.
+
+The disappointment with "small scale = small absolute returns" is valid but misframes the goal. The near-term objective is not impressive dollar returns — it is proving the system works correctly and profitably in simulation. Once proven, capital scales the returns proportionally. The system itself is the asset being built right now.
+
+Compounding math at 30% annually:
+- $5k → $6.5k (year 1) → $11k (year 3) → $18.5k (year 5) → $69k (year 10)
+- $50k → $65k (year 1) → $110k (year 3) → $185k (year 5) → $690k (year 10)
+
+The moment the strategy is validated, adding capital is the lever. The compounding curve is nonlinear — patience with the early phase is the actual edge most people don't have.
+
+### Why this is not like crypto mining
+
+Mining became winner-take-all because it is purely a capital and electricity cost problem — no knowledge component, no insight that provides edge. Knowledge-based trading strategies are fundamentally different. Large firms (Citadel, Two Sigma) deliberately avoid strategies that produce less than tens of millions annually — those strategies are too small to be worth their operational overhead. A strategy producing $200-500k/year is worthless to them and completely viable for a small operator. This is a genuine structural advantage of being small.
+
+### Future strategy research directions
+
+Beyond market making, these are knowledge-based strategies worth researching — not speed or scale dependent:
+
+**Funding rate arbitrage (crypto-specific, high priority)**
+On perpetual futures, a funding rate is paid between longs and shorts every 8 hours. During bull market euphoria, rates can reach 0.1% per 8 hours (100%+ annualized). Capture by going long spot and short the perpetual simultaneously — you earn the funding rate with near-zero directional risk. Highly profitable in certain market conditions, dormant in others. Natural complement to market making: when funding rates are high, run arb; when they're low, run market making. Requires capital deployed on both a spot and futures exchange.
+
+**Cross-exchange order book microstructure**
+Most strategies look at one exchange. The relationship between order book depth on Binance vs Coinbase vs Kraken for the same asset contains information about where informed order flow is concentrated. When books are asymmetric across exchanges in the same direction, it often precedes a move. Underexplored because it requires ingesting multiple feeds simultaneously — a data infrastructure problem, not a math problem.
+
+**Medium-frequency order flow imbalance (1 second to 5 minutes)**
+Too slow for HFT, too fast for most retail strategies. Academic research suggests predictable patterns at this scale based on order book imbalance that HFT firms deliberately ignore because the per-trade profit is below their threshold. Our ML drift estimator is already positioned here — this is worth pursuing further.
+
+**Abandoned strategies worth revisiting in crypto context**
+Pairs trading and mean reversion "stopped working" in equities as they got crowded. In crypto, correlations between assets shift dramatically with market regimes for mechanical reasons (capital rotation), not just statistical noise. The conditions that made these strategies work may still exist in crypto's less mature market structure.
+
+Academic reading worth doing: Glosten-Milgrom model, Kyle model (limit order book microstructure). Genuine signal there that hasn't been fully industrialized yet.
+
+### Business model and scaling path
+
+**Phase 1 — Prove the strategy (now)**
+Paper trade → validate profitability → deploy small real capital ($1k-5k). Goal is not impressive returns, it is proof that the system works.
+
+**Phase 2 — SaaS/platform model (cleanest path to scale)**
+Rather than a fund (which triggers securities law), build a platform where users connect their own exchange API keys and the bot trades on their behalf using their own capital. They never give you their money — you provide a service. Charge a performance fee (e.g. 20% of profits) or monthly subscription.
+
+This sidesteps the accredited investor problem entirely: users own their capital at all times, so there is no pooled investment vehicle and no securities offering. This is how legitimate retail algo trading platforms operate. The controller already manages one account; managing N accounts is an infrastructure problem, not a strategy problem.
+
+**Phase 3 — Capital raising if desired**
+If raising external capital later, legitimate paths for non-accredited investors:
+- **Regulation Crowdfunding (Reg CF):** Up to $5M/year from general public. Requires SEC filings and a registered crowdfunding platform. Real overhead but manageable.
+- **Regulation A+ (mini-IPO):** Up to $75M from general public. More overhead, serious capital potential.
+- **Operating company structure:** A technology company that develops trading software and deploys its own capital is a legitimate business. Investors buy equity in the business, not fund units. The SEC looks at substance — if it looks like a fund in substance, it will be treated as one regardless of corporate form. Consult a securities lawyer before structuring this.
+
+**Important legal caveat:** The above is general information, not legal advice. Before raising any external capital in any form, consult a securities attorney. The penalties for unregistered securities offerings are severe.
+
+---
+
 ## Trading pair selection
 
 **Primary pair: BTC-USDT**
