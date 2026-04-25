@@ -362,17 +362,21 @@ src/
 
 controllers/
   __init__.py
-  avellaneda_stoikov_controller.py   IMPLEMENTED WITH KNOWN GAPS (see below).
-                                     AvellanedaStoikovConfig (Hummingbot V2 config class).
-                                     AvellanedaStoikovController (ControllerBase subclass).
-                                     _extract_fee() helper for Hummingbot TradeFee.
-                                     _parse_order_book() converts raw book to OrderBookSnapshot.
-                                     _interval_to_seconds() raises on unknown unit.
+  market_making/
+    __init__.py
+    avellaneda_stoikov_controller.py   COMPLETE. Fully wired.
+                                       AvellanedaStoikovConfig: id, connector_name,
+                                       trading_pair, all A-S params, update_markets().
+                                       AvellanedaStoikovController: rate sources init,
+                                       stale executor cancellation implemented.
+                                       _extract_fee(), _parse_order_book(),
+                                       _interval_to_seconds() helpers.
 
 scripts/
-  hedge_bot.py                PARTIALLY IMPLEMENTED. Entry point thin wrapper.
-                              HedgeBotConfig and HedgeBot classes exist.
-                              init_markets() is a no-op — needs wiring (see gaps).
+  hedge_bot.py                COMPLETE. Thin entry point.
+                              HedgeBotConfig: controllers_config List[str].
+                              HedgeBot: delegates entirely to base class.
+                              init_markets handled by StrategyV2Base automatically.
 
 conf/scripts/
   conf_hedge_bot_1.yml.example   Config template. Copy to conf_hedge_bot_1.yml to run.
@@ -534,15 +538,21 @@ The original code would produce incorrect fee amounts when flat fees were used (
 
 ## Known gaps — must be resolved before live trading
 
-### Order cancellation (most critical architectural gap)
+### Order cancellation — RESOLVED
 
-**The problem:** `determine_executor_actions()` creates new bid and ask executors every tick but never cancels existing ones. Each tick adds two more open orders. After 10 minutes of 1-second ticks, there are 1200 open orders. This would cause the exchange to rate-limit the bot and then likely flag the account.
+**What was wrong:** `determine_executor_actions()` created new executors every tick without cancelling existing ones, accumulating open orders indefinitely.
 
-**Why it's not fixed yet:** In Hummingbot V2, the correct way to cancel executors is to issue `StopExecutorAction` for each active executor's ID. The IDs of active executors are accessible via `self.executors_info`. However, the exact lifecycle — when an executor is considered "active" vs "filled" vs "cancelled" — needs to be verified against the running Hummingbot version before implementation. Guessing at this incorrectly could cause the bot to cancel orders that are mid-fill.
-
-**What to do:** After installing Hummingbot and getting connectivity working, read the executor lifecycle documentation and look at existing V2 strategy examples (particularly `v2_with_controllers.py` in the Hummingbot repo). Then implement stale executor cancellation in `determine_executor_actions()` using `StopExecutorAction`.
-
-**There is a prominent TODO comment in the code pointing to this gap.**
+**The fix:** Before creating new executors each tick, we now issue `StopExecutorAction` for every executor where `e.is_active` is True:
+```python
+actions = [
+    StopExecutorAction(executor_id=e.id, controller_id=self.config.id)
+    for e in self.executors_info
+    if e.is_active
+]
+actions.extend(self._build_executor_actions(...))
+return actions
+```
+`self.executors_info` is provided by `ControllerBase` and contains the status of all executors spawned by this controller. `is_active` distinguishes executors that are live in the market from those that are already filled or cancelled. Cancelling only active ones avoids touching fills mid-execution.
 
 ### `on_order_filled` hook may not fire on the controller
 
@@ -550,11 +560,19 @@ The original code would produce incorrect fee amounts when flat fees were used (
 
 **What to do:** When Hummingbot is installed, verify this by adding a log statement to `on_order_filled` and placing a paper trade. If it doesn't fire, fills need to be captured by listening to Hummingbot's event bus or by reading executor state after fills complete.
 
-### `scripts/hedge_bot.py` not fully wired
+### `scripts/hedge_bot.py` — RESOLVED
 
-**The problem:** `HedgeBot.init_markets()` is a no-op. The controller is imported but not instantiated in the script. The V2 wiring pattern for connecting a script to a controller via the `controllers_config` field needs to be confirmed against the actual framework.
+**What was wrong:** Import path was `hummingbot.strategy_v2.strategy_v2_base` (doesn't exist). Field was `controller_config: str` (wrong name and type). `init_markets` was overridden as a no-op instead of delegating to the base class.
 
-**What to do:** After Hummingbot is installed, look at `v2_with_controllers.py` in the Hummingbot scripts directory for the canonical wiring pattern and replicate it.
+**The fix:** Import path is `hummingbot.strategy.strategy_v2_base`. Field is `controllers_config: List[str]` (plural, list — what the base class expects). `init_markets` override removed entirely — `StrategyV2Base.init_markets` automatically calls `load_controller_configs()`, iterates each controller config's `update_markets()`, and registers the resulting exchange/pair set with the connector factory.
+
+**How Hummingbot V2 wiring actually works:**
+1. Script YAML (`conf/scripts/`) has `controllers_config: [filename.yml]` pointing to files in `conf/controllers/`.
+2. Each controller YAML has `controller_type` and `controller_name`. Hummingbot builds the import path as `controllers.{controller_type}.{controller_name}` and imports it.
+3. It finds the `ControllerConfigBase` subclass in that module, instantiates it from the YAML, then instantiates the `ControllerBase` subclass.
+4. `update_markets()` on the config class registers the connector/pair so the strategy base knows what exchange connections to initialize before the strategy starts.
+
+**Important:** The controller module must live at `controllers/{controller_type}/{controller_name}.py`. Our file moved to `controllers/market_making/avellaneda_stoikov_controller.py`.
 
 ### No unit tests
 
@@ -776,19 +794,13 @@ The user's Docker Desktop was previously running Open WebUI and related containe
 
 These are the exact tasks to work on next, in this order. Do not skip ahead.
 
-1. **Do the first Docker run and fix whatever breaks.**
-   The Docker image is already pulled (`hummingbot/hummingbot:version-2.13.0`). The config file already exists (`conf/scripts/conf_hedge_bot_1.yml`). Run `docker compose run --rm hedge-bot` from the repo root. Type `dev` for the config password. Then inside Hummingbot run `start --v2 conf/scripts/conf_hedge_bot_1.yml`. Observe errors. The likely failures are: (a) script wiring in `hedge_bot.py` is incomplete, (b) import errors for our src modules. Fix them as they appear.
+1. **Do the first interactive Docker run.**
+   All imports are confirmed clean in the container. Run `docker compose run --rm hedge-bot` from the repo root. CONFIG_PASSWORD=dev is set in docker-compose.yml so no password prompt. Inside Hummingbot, run `start --script hedge_bot.py --conf conf_hedge_bot_1.yml`. Observe errors and fix as they appear.
 
-2. **Resolve script wiring in `scripts/hedge_bot.py`.**
-   The current file is a stub. Look at Hummingbot's `v2_with_controllers.py` example inside the running container at `/home/hummingbot/scripts/` to see the canonical V2 controller-to-script wiring pattern, then replicate it.
-
-3. **Verify executor lifecycle and implement order cancellation.**
-   Critical architectural gap — the controller creates new orders every tick but never cancels stale ones. Read the executor API from a running strategy, then implement `StopExecutorAction` for stale orders before creating new ones in `determine_executor_actions`.
-
-4. **Verify `on_order_filled` fires on the controller.**
+2. **Verify `on_order_filled` fires on the controller.**
    Place a paper trade and check logs. If it doesn't fire, capture fills via executor state or event bus instead.
 
-5. **Write unit tests for `src/core/avellaneda_stoikov.py`.**
+3. **Write unit tests for `src/core/avellaneda_stoikov.py`.**
    The variance_term bug was caught by review, not tests. Tests in `tests/core/test_avellaneda_stoikov.py`.
 
 ---
@@ -798,4 +810,5 @@ These are the exact tasks to work on next, in this order. Do not skip ahead.
 | Date | What happened |
 |---|---|
 | 2026-04-25 | Initial project. Discussed market making vs directional trading, A-S vs Black-Scholes, ML architecture, stablecoins/inventory, CEX vs DEX, Python performance. Implemented all Phase 1 files. Code review found and fixed: variance_term unit bug (critical), _interval_to_seconds silent fallback, unused imports, silent inventory exception, wrong fee extraction, wrong pyproject.toml build backend, removed scipy and jinja2 from core deps. Identified order cancellation gap and on_order_filled uncertainty. Created DEVELOPMENT.md and Cursor rules for session continuity. Added Docker setup (docker-compose.yml, volume mounts, PYTHONPATH). Cleaned Docker Desktop of all previous containers/images. Hummingbot image pull started but may not have completed at session end — re-run `docker compose pull` to confirm. |
-| 2026-04-25 | New session (context reset). Added `bar_portion` and `spread_timing` to `_short_features()` in `src/ml/features.py`. Self-review found and fixed: "Log-return" docstring mismatch (code computed simple return), missing docstrings on `_medium_features` and `_long_features`, misleading `compute_features` docstring re: NaN fill behavior for domain-specific defaults. File map status for `features.py` updated to reflect new features. Spread timing task removed from next-steps list. |
+| 2026-04-25 | New session (context reset). Added `bar_portion` and `spread_timing` to `_short_features()` in `src/ml/features.py`. Self-review found and fixed: "Log-return" docstring mismatch (code computed simple return), missing docstrings on `_medium_features` and `_long_features`, misleading `compute_features` docstring re: NaN fill behavior for domain-specific defaults. |
+| 2026-04-25 | Full V2 wiring investigation and fix. Root cause: Hummingbot builds module import path as `controllers.{controller_type}.{controller_name}`, so controller must live in a subdirectory. Moved to `controllers/market_making/`. Fixed `AvellanedaStoikovConfig`: added `id`, `connector_name`, `update_markets()`, correct `controller_type`. Fixed `hedge_bot.py`: correct import path, `controllers_config: List[str]`, removed no-op `init_markets`. Created `conf/controllers/` structure. Added `initialize_rate_sources` to controller `__init__`. Resolved order cancellation gap using `StopExecutorAction` for `is_active` executors. All imports verified clean in container. |
