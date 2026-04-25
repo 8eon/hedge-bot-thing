@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Hummingbot generated configs (contain API keys — never commit)
+conf/scripts/*.yml
+conf/*.yml
+!conf/scripts/*.yml.example
+
+# Logs and trade data
+logs/
+*.log
+data/
+
+# ML artifacts
+models/*.pkl
+models/*.pt
+models/*.joblib
+
+# Tax output (contains financial data)
+tax_output/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
