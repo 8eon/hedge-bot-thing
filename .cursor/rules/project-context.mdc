@@ -1,0 +1,18 @@
+---
+description: Project context and session continuity for hedge-bot-thing
+alwaysApply: true
+---
+
+# hedge-bot-thing — Session Context
+
+At the start of every session, read `DEVELOPMENT.md` in the repo root before doing anything else. It contains current implementation state, all architecture decisions with their reasoning, known gaps, and next steps.
+
+## Non-negotiable conventions
+
+- `src/core/` contains pure math with zero framework dependencies. Never import Hummingbot here.
+- `src/ml/` and `src/tax/` are also framework-agnostic. Controller is the only file that imports Hummingbot.
+- All code must be clean and maintainable. If fixing a bug would make the code messy, step back and find a clean fix first.
+- No comments that narrate what the code does. Comments explain why, not what.
+- After any substantive edit session, update `DEVELOPMENT.md` to reflect current state.
+- Commit messages must explain why, not just what changed.
+- Be conversational with the user. They have a C background and understand systems programming deeply. Don't over-explain basics.
