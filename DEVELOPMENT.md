@@ -657,7 +657,29 @@ For SOL, DOGE, and meme coins: funding spreads are 2-3x higher than BTC (SOL ave
 The main risk in funding arb is a funding rate flip (positive → negative), which happened during FTX. The standard strategy takes losses during flips. An enhancement nobody in retail is doing automatically: detect the flip and reverse the position (short spot + long perp instead of long spot + short perp), converting a drawdown into additional yield. Our existing regime classifier is already architecturally positioned to detect this. This is a genuinely underexplored combination.
 
 **Directly relevant paper: "Market Making in Crypto" (SSRN 5066176, Cornell, Dec 2024)**
-Developed a custom alpha signal called "Bar Portion" (BP) running on Hummingbot specifically. Live-traded SOL-USDT, DOGE-USDT, GALA-USDT for 24 hours and outperformed MACD baseline. Worth reading in full — uses our exact infrastructure.
+Authors: Sasha Stoikov et al., Cornell Financial Engineering Manhattan. Stoikov is the same person who co-authored the original 2008 Avellaneda-Stoikov paper we are implementing. He is still active and building on his own model.
+
+The paper develops a signal called "Bar Portion" (BP) — almost certainly `(close - low) / (high - low)` per candle, measuring where the close sits within the candle's high-low range. Value near 1.0 = closed near the high (bullish pressure). Value near 0.0 = closed near the low (bearish pressure). Averaged over a short window, this becomes a directional drift signal.
+
+Key properties that make it valuable alongside order flow imbalance:
+- Measures *outcome* (where did price end up?) rather than *pressure* (what was the book doing?). Low correlation with imbalance features = genuinely additive information.
+- Derived purely from OHLCV candles — no live order book required. Available from any exchange, any pair, any historical source.
+- Confirmed robust across cryptocurrencies in the paper.
+
+Live-traded on Hummingbot (SOL-USDT, DOGE-USDT, GALA-USDT perpetuals) and outperformed MACD baseline.
+
+**Implementation for `_short_features()` in `src/ml/features.py`:**
+```python
+high = recent["high"]
+low = recent["low"]
+close = recent["close"]
+range_ = (high - low).replace(0, float("nan"))
+bar_portion = ((close - low) / range_).mean()
+features["bar_portion"] = float(bar_portion) if np.isfinite(bar_portion) else 0.5
+```
+Use 0.5 as fallback (neutral, no directional signal) rather than 0.0.
+
+Also noted: Hummingbot's built-in V1 `avellaneda_market_making` strategy estimates kappa automatically from the order book via a `trading_intensity` indicator. Compare against our manual kappa config once the Docker run is working — may be worth borrowing their estimator.
 
 ### Business model and scaling path
 
