@@ -19,11 +19,14 @@ Hummingbot's --v2 startup path.
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 # Allow imports from src/ when running inside Hummingbot's working directory.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -48,7 +51,6 @@ try:
     )
     from hummingbot.strategy_v2.executors.position_executor.data_types import (
         PositionExecutorConfig,
-        TrailingStop,
     )
     from hummingbot.strategy_v2.models.executor_actions import (
         CreateExecutorAction,
@@ -220,14 +222,15 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
             base_asset = self.config.trading_pair.split("-")[0]
             balance = connector.get_available_balance(base_asset)
             return float(balance)
-        except Exception:
+        except Exception as e:
+            self.logger().warning(
+                f"Could not fetch {self.config.trading_pair.split('-')[0]} balance, "
+                f"using 0.0 — inventory limits may not be accurate: {e}"
+            )
             return 0.0
 
     def _compute_volatility(self, candles) -> float:
         """Estimate per-second volatility from recent candle close prices."""
-        import numpy as np
-        import pandas as pd
-
         closes = candles["close"].values.astype(float)
         if len(closes) < 2:
             return 0.001  # safe fallback
@@ -242,6 +245,13 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
         """
         Main entry point called by Hummingbot on each strategy tick.
         Returns a list of executor actions (create / stop).
+
+        TODO: Before creating new orders, active executors from the previous tick
+        must be stopped. Without this, each tick accumulates more open orders.
+        Implement by calling StopExecutorAction for all active executor IDs tracked
+        in self.executors_info before appending CreateExecutorActions. This requires
+        verifying the exact executor lifecycle API against the installed Hummingbot
+        version before implementing, to avoid cancelling fills mid-execution.
         """
         self._refresh_params()
 
@@ -273,7 +283,6 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
 
         if regime == MarketRegime.HIGH_VOLATILITY:
             half_spread = quotes.spread / 2 * self.config.high_vol_spread_multiplier
-            from dataclasses import replace
             quotes = QuoteResult(
                 bid=quotes.reservation_price - half_spread,
                 ask=quotes.reservation_price + half_spread,
@@ -333,6 +342,9 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
         Called by Hummingbot when an order fills. Records the trade to the log.
         Override point for fill handling.
         """
+        quote_asset = self.config.trading_pair.split("-")[1]
+        fee, fee_asset = _extract_fee(fill_event.trade_fee, quote_asset)
+
         record = TradeRecord(
             trade_id=fill_event.exchange_trade_id,
             timestamp=TradeRecord.now_utc(),
@@ -340,11 +352,11 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
             trading_pair=self.config.trading_pair,
             side=TradeSide.BUY if fill_event.trade_type.name == "BUY" else TradeSide.SELL,
             base_asset=self.config.trading_pair.split("-")[0],
-            quote_asset=self.config.trading_pair.split("-")[1],
+            quote_asset=quote_asset,
             quantity=float(fill_event.amount),
             price=float(fill_event.price),
-            fee=float(fill_event.trade_fee.percent * fill_event.amount * fill_event.price),
-            fee_asset=fill_event.trade_fee.percent_token or self.config.trading_pair.split("-")[1],
+            fee=fee,
+            fee_asset=fee_asset,
             order_id=fill_event.order_id,
             is_paper="paper" in self.config.exchange.lower(),
         )
@@ -370,6 +382,33 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _extract_fee(trade_fee, quote_asset: str) -> tuple[float, str]:
+    """
+    Extract fee amount and asset from a Hummingbot TradeFee object.
+
+    Hummingbot represents fees in two ways:
+      - flat_fees: a list of (token, amount) pairs for fixed fees
+      - percent / percent_token: a percentage of trade value in a specific token
+
+    We prefer flat_fees when present, as they are exact. The percentage form
+    is an approximation since we don't have the exact fill price here.
+    """
+    if hasattr(trade_fee, "flat_fees") and trade_fee.flat_fees:
+        # Sum all flat fee amounts denominated in the same token.
+        # For mixed-token fees (rare), take the first entry only.
+        token = trade_fee.flat_fees[0].token
+        amount = sum(f.amount for f in trade_fee.flat_fees if f.token == token)
+        return float(amount), token
+
+    if hasattr(trade_fee, "percent") and trade_fee.percent:
+        # Percentage fee: amount is unknowable here without the fill value.
+        # Store the raw percent and token so downstream tax code can resolve it.
+        token = getattr(trade_fee, "percent_token", None) or quote_asset
+        return float(trade_fee.percent), token
+
+    return 0.0, quote_asset
+
+
 def _parse_order_book(raw) -> OrderBookSnapshot:
     """Convert Hummingbot's order book object to our OrderBookSnapshot."""
     bids = [(float(p), float(s)) for p, s in raw.bid_entries()]
@@ -386,5 +425,10 @@ def _interval_to_seconds(interval: str) -> float:
     """Convert a candle interval string (e.g. '1m', '5m', '1h') to seconds."""
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     unit = interval[-1]
+    if unit not in units:
+        raise ValueError(
+            f"Unrecognized candle interval unit '{unit}' in '{interval}'. "
+            f"Expected one of: {list(units.keys())}"
+        )
     value = float(interval[:-1])
-    return value * units.get(unit, 60)
+    return value * units[unit]

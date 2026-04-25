@@ -23,8 +23,7 @@ All prices are in quote asset units (e.g. USDT).
 """
 
 import math
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -139,15 +138,17 @@ def compute_quotes(params: ModelParameters, state: MarketState) -> QuoteResult:
             inventory_skew=0.0,
         )
 
-    variance_term = params.gamma * (state.volatility ** 2) * time_remaining
+    # T-t in actual seconds: volatility is per-second, so the variance term must
+    # use real elapsed time, not the normalized [0, 1] ratio.
+    seconds_remaining = time_remaining * params.time_horizon
+    variance_term = params.gamma * (state.volatility ** 2) * seconds_remaining
 
     # Inventory skew: shifts reservation price away from current mid to encourage
     # rebalancing. A long inventory (q > 0) pulls quotes down; short pulls up.
     inventory_skew = state.inventory * variance_term
 
-    # Drift contribution: the ML-supplied drift shifts the reservation price in the
-    # direction of predicted flow over the remaining horizon.
-    drift_contribution = state.drift * time_remaining * params.time_horizon
+    # Drift contribution: ML-supplied drift (price/second) × seconds remaining.
+    drift_contribution = state.drift * seconds_remaining
 
     reservation_price = state.mid_price + drift_contribution - inventory_skew
 
