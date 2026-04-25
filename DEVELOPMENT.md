@@ -4,6 +4,91 @@ This file is the authoritative source of truth for session continuity. Every AI 
 
 ---
 
+## Instructions for the incoming agent — read this first, before everything else
+
+You are resuming an ongoing collaborative project. Before you do anything — before you read any code, before you respond to the user, before you run any commands — read this entire document. It is not long for the sake of being long. Every section exists because a previous context learned something the hard way and documented it so you wouldn't have to.
+
+### How to get fully caught up
+
+Do these steps in order before engaging with any task:
+
+1. **Read this entire file without skipping.** The section order is intentional. Philosophy before architecture, architecture before implementation, implementation before gaps. You need the philosophy to understand why the architecture is the way it is.
+
+2. **Read every source file.** They are listed in the file map below with their implementation status. The files are not large. Read them all. Pay particular attention to the docstrings — they explain the "why" behind non-obvious decisions and contain unit information that has caused bugs before.
+
+3. **Run `git log --oneline -20`** to see what has happened since this document was last updated. If commits exist that are not reflected in the session log at the bottom of this file, read the diffs and update your mental model accordingly.
+
+4. **Check the known gaps section.** Before starting any new work, know which gaps exist. Do not accidentally build on top of a known broken assumption.
+
+5. **Ask the user what they want to work on.** Do not assume. Do not jump into the most obvious next thing on the roadmap without confirming. The user may have context you don't.
+
+### How to behave in this project
+
+This is a collaborative project, not a task queue. The user is a capable engineer who wants to understand what is being built and why. They are not looking for an agent that silently executes instructions and produces output. They want a conversation.
+
+**Be direct.** If you see a problem, say so. If the user's idea has a flaw, explain it clearly and propose the correct approach. Do not validate incorrect ideas to avoid friction. The user has explicitly stated they appreciate being corrected.
+
+**Be conversational.** Respond like a knowledgeable colleague, not a documentation generator. Keep explanations tight and calibrated to the user's level. They have a deep C/systems background — you do not need to explain what a pointer is, but you should explain what adverse selection means.
+
+**Ask before building.** If a task is ambiguous or has meaningful architectural implications, discuss it before writing code. The user cares deeply about code cleanliness. A five-minute conversation that clarifies requirements prevents a messy implementation that needs to be torn out.
+
+**Never just do the obvious thing.** Before writing any code, think about whether it fits the existing architecture. If it doesn't fit cleanly, stop and discuss. The project has a strong separation of concerns: pure math in `src/core/`, ML in `src/ml/`, tax in `src/tax/`, all framework coupling in `controllers/`. Something that violates this is a design problem, not just a coding task.
+
+**Do code reviews regularly.** The variance_term bug was caught in a review, not by tests (tests don't exist yet). Reviews should happen after any substantive implementation session. The format: silly mistakes first, then inefficiencies, then architectural oversights, then general correctness, then anything else that seems important.
+
+**Update this document proactively.** Do not wait until the end of a session. If a decision is made, a bug is found, a gap is identified, or understanding deepens — update the relevant section immediately. Context degradation is the primary enemy of project quality over time.
+
+---
+
+## Project design philosophy
+
+These are the principles that govern every decision in this project. When facing a choice that isn't covered by a specific guideline, these principles should resolve it.
+
+### Mathematical foundation before machine learning
+
+The Avellaneda-Stoikov model provides a theoretically grounded, mathematically derivable framework for market making. ML sits on top of it to estimate the one parameter (drift) that the model cannot derive from observable data alone, and to classify market regimes that determine how the model's parameters should be adjusted.
+
+This ordering is deliberate and must be preserved. An end-to-end ML system that takes market data and outputs order prices is a black box. When it misbehaves — and it will — there is no principled way to debug it. You do not know whether it is failing because of a bad feature, a bad model, insufficient data, a regime shift, or a bug. You cannot audit it. You cannot explain to yourself or anyone else why it placed a specific order.
+
+The A-S model is fully auditable. Given any market state, you can compute by hand what the bid and ask should be. When something seems wrong, you check the model inputs and verify the output against the formula. This property must be preserved as the project grows. ML should always be a narrow, targeted component with interpretable inputs and outputs, not a replacement for the core decision logic.
+
+### No real money until the model is validated
+
+Paper trading and exchange testnets exist specifically for this purpose. A strategy that looks reasonable in design can fail in ways that are only visible when running against real market data. The correct order is: paper trade → observe behavior → identify problems → fix → paper trade again → validate profitability → deploy live with small capital and hard limits.
+
+Skipping any step in this sequence is how people lose real money. There is no urgency that justifies bypassing it.
+
+### Clean code is not optional
+
+The user stated this explicitly and it is a core project value. Maintainability matters more than cleverness, more than conciseness, and more than getting something working quickly. A working but messy solution is worse than a slightly delayed clean solution, because messy code compounds — every subsequent change becomes harder and more bug-prone.
+
+Specific practices that follow from this:
+- Before fixing a bug, think about whether the fix fits the existing structure or whether the structure itself needs to change.
+- Never add a parameter, flag, or special case without asking whether the design should be reconsidered instead.
+- If you find yourself writing a long comment to explain what code does, the code should probably be restructured to be self-explanatory.
+- Comments explain why, not what. A comment that says "increment the counter" is worse than no comment.
+- Functions do one thing. If a function is doing two things and both need explaining, it should be two functions.
+
+### Safe defaults everywhere
+
+Every component that has an "uninitialized" or "untrained" state must behave safely in that state. The ML models return zero drift and RANGING regime when no model is loaded. The inventory fallback returns 0.0 (with a warning) when the balance fetch fails. End-of-session behavior widens spreads to prevent fills rather than producing undefined behavior.
+
+This principle extends to future development: any new component that can be in an incomplete state must define and implement its safe default behavior before it is integrated.
+
+### Transparency over performance
+
+Where there is a trade-off between a more efficient but opaque approach and a slightly less efficient but transparent approach, prefer transparency. This is a trading system. Understanding what it is doing and why — at every moment — is more important than squeezing out marginally better performance.
+
+This does not mean being gratuitously slow. It means: don't use a clever bitwise trick where a readable conditional would do, don't compress logic into a one-liner that requires mental unpacking, and don't sacrifice legibility for a micro-optimization that has no measurable impact on the system's actual bottleneck (which is network latency, not CPU).
+
+### Compliance is built in, not bolted on
+
+Every trade is a potential taxable event. The trade logger is a first-class component, not an afterthought. Every fill, from the very first paper trade, is recorded with full IRS-required metadata. This approach costs almost nothing to maintain and avoids a painful reconstruction problem later.
+
+Never disable or bypass trade logging, even during testing or debugging, unless you are certain you are not generating taxable events.
+
+---
+
 ## User profile and working style
 
 The user has a background in highly optimized C programming. They understand systems-level concepts deeply — memory, performance, concurrency, data structures — but are not a quant finance specialist. They learn quickly when explanations are grounded in systems analogies rather than finance jargon. They want the conversation to be collaborative and direct, not overly "agent-like." They will ask questions when they don't understand something and expect honest corrections when their intuitions are wrong.
