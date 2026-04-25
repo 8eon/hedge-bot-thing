@@ -748,17 +748,25 @@ The user's Docker Desktop was previously running Open WebUI and related containe
 
 ## Immediate next steps (in priority order)
 
-1. **Complete the Docker image pull** if it did not finish. Run `docker compose pull` from the repo root. The image is ~1.5GB. Expect a platform warning (amd64 on arm64) — this is normal.
+These are the exact tasks to work on next, in this order. Do not skip ahead.
 
-2. **Copy the config and do the first run.** `cp conf/scripts/conf_hedge_bot_1.yml.example conf/scripts/conf_hedge_bot_1.yml` then `docker compose run --rm hedge-bot`. The goal of this first run is simply to see what Hummingbot looks like and whether the script loads without import errors.
+1. **Add Spread Timing feature to `src/ml/features.py`.**
+   In `_short_features()`, add a new feature: `spread_timing = current_spread_bps / rolling_mean_spread_bps - 1`. Compute `rolling_mean_spread_bps` as the mean of spread_bps over the short window candles. When this value is negative (spread is tighter than normal), the order flow imbalance signal is more reliable and persistent. Research (Delphi Alpha Jan 2026) shows this is the only signal whose predictive IC *increases* over time (0.080 at 10s → 0.104 at 120s). We are not computing it currently. Add it, make sure it serializes cleanly to the feature dict, and update the docstring.
 
-3. **Resolve script wiring in `scripts/hedge_bot.py`.** The current file is a stub. Look at Hummingbot's `v2_with_controllers.py` example inside the running container at `/home/hummingbot/scripts/` to see the canonical V2 controller wiring pattern, then replicate it.
+2. **Do the first Docker run and fix whatever breaks.**
+   The Docker image is already pulled (`hummingbot/hummingbot:version-2.13.0`). The config file already exists (`conf/scripts/conf_hedge_bot_1.yml`). Run `docker compose run --rm hedge-bot` from the repo root. Type `dev` for the config password. Then inside Hummingbot run `start --v2 conf/scripts/conf_hedge_bot_1.yml`. Observe errors. The likely failures are: (a) script wiring in `hedge_bot.py` is incomplete, (b) import errors for our src modules. Fix them as they appear.
 
-4. **Verify executor lifecycle and implement order cancellation.** This is the critical architectural gap. Read the executor API from inside a running strategy, then implement `StopExecutorAction` for stale orders before creating new ones in `determine_executor_actions`.
+3. **Resolve script wiring in `scripts/hedge_bot.py`.**
+   The current file is a stub. Look at Hummingbot's `v2_with_controllers.py` example inside the running container at `/home/hummingbot/scripts/` to see the canonical V2 controller-to-script wiring pattern, then replicate it.
 
-5. **Verify `on_order_filled` fires on the controller.** Place a paper trade and check logs. If it doesn't fire, capture fills via the executor state or event bus instead.
+4. **Verify executor lifecycle and implement order cancellation.**
+   Critical architectural gap — the controller creates new orders every tick but never cancels stale ones. Read the executor API from a running strategy, then implement `StopExecutorAction` for stale orders before creating new ones in `determine_executor_actions`.
 
-6. **Write unit tests for `src/core/avellaneda_stoikov.py`** — the variance_term bug was caught by review, not tests. Tests would catch it first next time.
+5. **Verify `on_order_filled` fires on the controller.**
+   Place a paper trade and check logs. If it doesn't fire, capture fills via executor state or event bus instead.
+
+6. **Write unit tests for `src/core/avellaneda_stoikov.py`.**
+   The variance_term bug was caught by review, not tests. Tests in `tests/core/test_avellaneda_stoikov.py`.
 
 ---
 
