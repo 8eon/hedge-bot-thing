@@ -1,80 +1,487 @@
 # Development State
 
-This file is the source of truth for session continuity. Read it fully at the start of every session before touching any code. Update it before ending a session.
+This file is the authoritative source of truth for session continuity. Every AI agent working on this project must read it fully before touching any code. It must be updated whenever meaningful decisions are made, bugs are found, architecture changes, or understanding deepens — not just at the end of a session. The goal is that a completely fresh context reading only this file can resume work at the same quality level as the context that wrote it.
 
 ---
 
-## What this project is
+## User profile and working style
 
-An advanced cryptocurrency market making bot built on Hummingbot V2. It implements the Avellaneda-Stoikov market making model with a machine learning layer for short-horizon drift estimation and market regime detection, plus IRS-compliant trade logging.
+The user has a background in highly optimized C programming. They understand systems-level concepts deeply — memory, performance, concurrency, data structures — but are not a quant finance specialist. They learn quickly when explanations are grounded in systems analogies rather than finance jargon. They want the conversation to be collaborative and direct, not overly "agent-like." They will ask questions when they don't understand something and expect honest corrections when their intuitions are wrong.
 
-The user has a C systems programming background. They are not a quant finance expert but learns fast. Keep explanations grounded.
+Important working preferences:
+- Code must be clean and maintainable above all else. If fixing a bug would introduce messiness, step back and find a clean approach. The user explicitly does not want a "muddy mud pile."
+- Do not use emojis. Keep communication professional and direct.
+- Do not over-explain things the user already understands. Calibrate to their level.
+- Always be willing to correct the user when they have a wrong assumption. They appreciate it.
+- Reviews of code should happen regularly. Asking an AI to review its own code catches real bugs.
 
 ---
 
-## File map
+## What this project is and why it exists
+
+This is an advanced cryptocurrency market making bot built on top of Hummingbot V2. The high-level goal is to apply institutional-grade quantitative trading techniques — specifically market making — to cryptocurrency markets, which are more accessible and less efficient than traditional stock markets.
+
+The inspiration came from hedge funds. Traditional hedge funds use sophisticated quantitative strategies on stock markets, but those markets are dominated by firms with massive infrastructure advantages (co-location, proprietary feeds, decades of data). Cryptocurrency markets are fragmented, trade 24/7, and are still less efficient, meaning the edge available to a well-designed systematic strategy is proportionally larger for a smaller operator.
+
+The choice to build on Hummingbot rather than from scratch is deliberate: Hummingbot provides exchange connectors (REST and WebSocket), order management infrastructure, paper trading mode, and a clock/tick system. These are solved problems that would take significant time to build well. Our value-add is the strategy logic, ML layer, and tax pipeline on top of that foundation.
+
+---
+
+## Why market making and not directional trading
+
+Directional trading means predicting whether a price will go up or down and taking a position accordingly. This sounds intuitive but is extremely difficult to do profitably over any meaningful time horizon. The market is full of participants attempting to do exactly this, including sophisticated quantitative funds with better data, faster execution, and more capital. The edge available to a retail-scale operator doing directional trading is thin at best.
+
+Market making is structurally different. A market maker does not predict price direction. Instead, they continuously post a buy order slightly below the current fair price and a sell order slightly above it. When both sides fill, the market maker has captured the difference (the spread) as profit without taking any directional risk. The market maker acts as the shop rather than the customer — they provide liquidity to other traders who want to transact immediately.
+
+Why this is more reliable for a systematic bot:
+- The edge comes from the spread and from being on both sides of the market, not from price prediction, which is the hardest problem in finance.
+- Returns are consistent across bull and bear markets. A market maker makes money in both directions as long as both sides of the book are active.
+- The risk is well-defined and mechanical: inventory risk (holding too much of one asset when the price moves against you) rather than the open-ended risk of a wrong directional bet.
+- Professional market making firms (Citadel Securities, Virtu Financial, Jane Street) are among the most consistently profitable businesses in all of finance. They profit in virtually every market condition.
+
+The primary risk for a market maker is "adverse selection" — being filled repeatedly on one side by informed traders who know something about where the price is going, while the other side never fills. The Avellaneda-Stoikov model is specifically designed to manage this risk through inventory-aware spread and quote adjustment.
+
+---
+
+## Why cryptocurrency markets specifically
+
+Several properties of crypto markets make them well-suited for this strategy:
+
+1. **24/7 operation.** No overnight gaps, no market opens/closes to worry about. The bot can run continuously.
+2. **Fragmentation.** Many exchanges trade the same assets, creating arbitrage and liquidity opportunities that don't exist in centralized traditional markets.
+3. **Relative inefficiency.** Crypto markets are less mature than equity markets, meaning mispricings persist longer and the edge from a well-designed strategy is more durable.
+4. **Accessibility.** CEX testnets with fake funds exist and are realistic. You can develop, test, and validate a strategy with zero real money at risk.
+5. **Lower infrastructure requirements.** On equities, HFT firms are physically co-located with exchange servers. On crypto, a well-designed bot on a normal internet connection can compete meaningfully.
+
+---
+
+## Why paper trading first and why CEX over DEX
+
+The decision to start with centralized exchange (CEX) paper trading rather than decentralized exchanges (DEX) is deliberate and important.
+
+**CEX advantages for development:**
+- Binance testnet provides fake funds and a realistic simulated order book. The paper trading environment is close enough to live trading that strategy validation there has real meaning.
+- Order placement, cancellation, and fill events are simple HTTP/WebSocket calls. The API is well-documented.
+- Hummingbot has mature, battle-tested CEX connectors. We do not need to write any exchange integration code.
+- Fee structures are predictable and well-defined.
+
+**DEX disadvantages for this stage:**
+- Every transaction costs gas. Gas prices fluctuate, and the cost must be incorporated into the spread calculation or it will eat the strategy's profit.
+- MEV (Maximal Extractable Value) bots front-run orders on DEXes. A market making strategy can be systematically exploited by these bots in ways that are very hard to model or defend against.
+- Simulating DEX behavior accurately in paper trading is very difficult because of gas and MEV.
+- Smart contract interaction adds a layer of complexity and failure modes.
+
+DEXes are not ruled out permanently — they introduce interesting opportunities especially around liquidity pools — but they are a separate and more complex problem. Start with CEX.
+
+**No real money until validated.** Paper trading produces realistic data for ML training (feature vectors and trade outcomes) and validates that the strategy is profitable before any capital is at risk. This is non-negotiable. The ML models should be trained on paper trading data before live deployment.
+
+---
+
+## Why Avellaneda-Stoikov and not Black-Scholes
+
+This distinction is important to preserve because it comes up naturally and the relationship between the two models is easy to misunderstand.
+
+**Black-Scholes** is an options pricing model. It answers: "What is the fair value of an options contract?" It models the underlying asset as a geometric Brownian motion with drift μ and volatility σ, and through a clever delta-hedging argument, derives that the option price is independent of drift — drift cancels out of the final equation. This is one of the most famous results in quantitative finance and is why Merton and Scholes won the Nobel Prize. Black-Scholes is a valuation tool, not a trading strategy. It has nothing to say about where to place limit orders.
+
+**Avellaneda-Stoikov** is a market making model. It answers: "Given my current inventory, the market's volatility, and my risk tolerance, where should I place my bid and ask orders right now to maximize expected utility?" This is the problem we are solving.
+
+The key insight of A-S is the **reservation price**: a risk-adjusted mid price that accounts for inventory. A dealer holding more base asset than they want will shade their quotes downward to encourage more selling and less buying, reducing their exposure. Conversely, a dealer who is short will shade upward. This inventory-aware adjustment is the core of the model.
+
+In A-S, unlike Black-Scholes, drift does NOT cancel out. The drift term directly shifts the reservation price in the direction of predicted flow. This is precisely why the ML drift estimator is a meaningful and well-scoped component: it provides the one input the model cannot derive from the order book alone, and its effect is direct and interpretable.
+
+The A-S closed-form solution produces:
 
 ```
-src/core/avellaneda_stoikov.py   Pure A-S math. No framework deps. Fully implemented.
-src/ml/features.py               Multi-scale feature engineering. Fully implemented.
-src/ml/drift_estimator.py        Ridge regression drift estimator. Implemented; no trained model yet.
-src/ml/regime_classifier.py      Random Forest regime classifier. Implemented; no trained model yet.
-src/tax/trade_logger.py          Append-only JSONL trade log. Fully implemented.
-controllers/avellaneda_stoikov_controller.py  Hummingbot V2 controller. Implemented with one known gap (see below).
-scripts/hedge_bot.py             Hummingbot entry point script. Thin wrapper, implemented.
-conf/scripts/conf_hedge_bot_1.yml.example  Config template. Copy to .yml to run.
+Reservation price:  r = s + μ·(T-t) - q·γ·σ²·(T-t)
+Optimal spread:     δ = γ·σ²·(T-t) + (2/γ)·ln(1 + γ/κ)
+Bid:  r - δ/2
+Ask:  r + δ/2
+```
+
+Where:
+- `s` = current mid price
+- `μ` = expected short-horizon drift (from ML estimator; 0 if unavailable)
+- `q` = current inventory in base asset units (positive = long, negative = short)
+- `γ` = risk-aversion parameter (higher = wider spreads, more aggressive inventory skewing)
+- `σ` = volatility per second
+- `T-t` = time remaining in session in seconds (not normalized — see the critical bug section)
+- `κ` = order arrival rate intensity (higher = more liquid market = tighter optimal spreads)
+
+---
+
+## The ML architecture and why it is designed this way
+
+The core design principle: **ML tunes parameters within the model; it does not replace the decision loop.**
+
+An end-to-end learned system (e.g. "given order book data, output bid and ask prices directly") is a black box. When it misbehaves, diagnosing why is extremely difficult. It is also prone to overfitting and regime changes. A market making bot that malfunctions with real capital at stake needs to be debuggable.
+
+Instead, the ML layer has two narrowly scoped jobs:
+
+**1. Short-horizon drift estimation (DriftEstimator)**
+
+The A-S model has one parameter that is genuinely unknown: the expected short-horizon drift of the asset price. The model defaults to zero drift, which is safe but suboptimal in trending conditions. A regression model trained on order book microstructure features outputs a drift estimate (in quote asset per second) that feeds directly into the reservation price calculation.
+
+The key insight about this component: it is NOT trying to predict where the price will be in an hour or a day. It is predicting directional pressure over the next 30 seconds to a few minutes — the time scale at which the bot's current quotes will be live in the market. This is a much more tractable prediction problem than long-horizon forecasting.
+
+**2. Market regime detection (RegimeClassifier)**
+
+A classifier that identifies which of three market conditions currently prevails:
+- **RANGING**: Normal conditions. The asset is trading sideways with no strong directional bias. Standard A-S parameters apply.
+- **TRENDING**: Sustained directional pressure. The asset is moving strongly in one direction. Market making becomes more risky because you keep getting filled on the same side (adverse selection). The controller responds by skewing quotes more aggressively and halving order size to reduce exposure.
+- **HIGH_VOLATILITY**: Chaotic conditions, large price swings. Spreads are widened by a configurable multiplier. If volatility is extreme enough, quoting should be suspended entirely. This is the equivalent of a market maker "stepping away" from the book when conditions are too risky.
+
+**Why scikit-learn and not TensorFlow/PyTorch:**
+
+The current implementation uses a Ridge regression pipeline for drift and a Random Forest pipeline for regime. This is deliberate:
+- Both models are interpretable. You can inspect Ridge regression coefficients to understand which features are driving the drift signal. Random Forest provides feature importances for the regime classifier. When something seems wrong, you can actually look at what the model is doing.
+- No GPU required. Training takes milliseconds on the amount of data we'll have initially.
+- The interface is identical regardless of what's underneath (`predict(features)` returns a scalar or label). Upgrading to gradient boosting (XGBoost/LightGBM) or a sequence model (LSTM, Transformer) is a one-file change.
+- scikit-learn models are significantly more appropriate for tabular feature data than deep learning at this scale. Deep learning tends to outperform on raw sequence input or image data, not on hand-engineered feature vectors.
+
+The upgrade path when the baseline is proven insufficient:
+1. Gradient boosting (XGBoost/LightGBM) — still tabular, significantly more expressive than linear/tree models, no deep learning complexity
+2. LSTM/Transformer — when you want to process raw time series rather than hand-engineered features, and you have enough data to justify the complexity
+
+Do not upgrade until paper trading data shows the current model is leaving measurable money on the table. Premature complexity is a trap.
+
+**Why both models fall back to safe defaults when untrained:**
+
+`DriftEstimator.predict()` returns `0.0` (zero drift assumption, identical to the original A-S paper) when no trained model is loaded. `RegimeClassifier.predict()` returns `MarketRegime.RANGING` (standard parameters) when no model is loaded. This means:
+- The system runs correctly from day one with no ML infrastructure at all.
+- Paper trading can begin immediately to collect the training data needed for the ML layer.
+- There is never a hard dependency on having a trained model file present.
+- The ML layer improves performance; it does not gate operation.
+
+---
+
+## Multi-scale feature engineering — the critical design distinction
+
+The feature engineering design arose from the user's question about whether the drift estimator could look at longer-horizon data to avoid predicting noise. The answer is yes, but with an important distinction that must be preserved:
+
+**Feature lookback window** (how far back you look to compute inputs): can and should be long. Using only 5-second order book snapshots gives noisy, hard-to-interpret signals. Including features derived from 5-minute momentum, 1-hour VWAP deviation, and multi-day trend direction dramatically improves signal quality. The longer-term features tell the model whether the current microstructure noise is occurring inside a sustained trend (in which case it should be weighted more heavily) or a ranging market (where it's more likely to mean-revert).
+
+**Prediction horizon** (how far forward the model predicts): must remain short — seconds to low minutes. This is the time over which the bot's current quotes will be live. If you train the model to predict a 3-day forward return and feed that into a quote placement decision that executes in 30 seconds, the time horizon mismatch makes the drift term actively harmful rather than helpful.
+
+The three feature groups in `src/ml/features.py`:
+
+**Short-horizon features (seconds to ~5 minutes):**
+- Order book depth imbalance (signed ratio of bid vs ask volume in top N levels)
+- Trade flow directional skew (taker buy volume as fraction of total volume)
+- Short-window price return
+- Short-window volatility
+- Bid/ask spread in basis points
+- Volume acceleration (current candle volume vs recent average)
+
+**Medium-horizon features (minutes to ~1 hour):**
+- VWAP deviation (current price relative to volume-weighted average)
+- Momentum at 1/4, 1/2, and full medium window
+- Medium-window volatility
+- Volume trend (recent vs historical average)
+
+**Long-horizon features (hours to ~1 day):**
+- Total return over the long window
+- Linear regression slope as normalized trend strength
+- Whether current price is above or below the long-window SMA
+
+The key: all three groups feed into a single model that predicts short-horizon drift. The long-horizon features are contextual — they help the model understand the broader environment — but the target variable is always short-horizon.
+
+---
+
+## Stablecoins and inventory management
+
+The user raised the idea of using stablecoins to "increase stability in times of chaos." This intuition is correct, and it is already built into the architecture in two ways:
+
+**First:** When trading BTC-USDT, USDT is the quote currency and is already the "safe" side of the inventory. The A-S model continuously works to rebalance toward a neutral inventory position, which means it naturally pushes toward holding more USDT (the safe side) when BTC inventory builds up. Stablecoins-as-safe-haven is the implicit goal of inventory management.
+
+**Second:** The HIGH_VOLATILITY regime is exactly the "chaos" condition the user described. When the regime classifier identifies it, the controller widens spreads and can suspend quoting entirely — which means the bot stops deploying capital into the volatile asset and sits in USDT. This is the computational equivalent of a flight-to-safety trade.
+
+---
+
+## Capital requirements and accessibility
+
+The user was concerned about whether market making requires large capital like a hedge fund. It does not:
+
+- You need enough capital to post orders that are large enough relative to exchange minimums and fee structures. On Binance, this is a few hundred to a few thousand dollars for the strategy to function correctly on BTC-USDT.
+- The strategy scales proportionally. Smaller capital makes proportionally less profit per trade but the mechanics are identical.
+- The main constraint is the spread-vs-fee ratio, not absolute capital size. On a liquid pair, spreads are tight and fees can eat them. On less liquid pairs, spreads are wider but inventory risk is higher. This balance is configurable.
+- For paper trading, none of this matters — the bot uses fake balances.
+
+---
+
+## Python and performance
+
+The user comes from a C background and naturally thinks about performance. For this application, Python's performance is not a meaningful constraint:
+
+- The bottleneck is network round-trip time to the exchange, not CPU. A market making strategy at this scale places orders in response to market events that arrive over a network connection. The latency of a Python function call is irrelevant compared to the 5-100ms network round trip.
+- The only place where Python performance would become a concern is very high-frequency tick-by-tick order book processing (sub-millisecond decisions). We are not operating at that frequency. Our strategy operates on candle intervals (1-minute minimum) and responds to fill events.
+- The ML inference path (feature computation + model predict) runs in microseconds to low milliseconds, well within any reasonable tick interval.
+- If a future version required HFT-class latency, the hot path would be rewritten in C/Rust and interfaced via Python FFI. But this is not a current concern and should not be introduced prematurely.
+
+---
+
+## Tax reporting and IRS requirements
+
+Cryptocurrency transactions are required to be reported to the IRS. Specifically:
+- Every disposal (sale) of a cryptocurrency is a potentially taxable event.
+- Cost basis must be tracked from acquisition through disposal.
+- Net gains and losses are reported on Form 8949 (individual transactions) and summarized on Schedule D.
+- The IRS accepts three cost basis methods: FIFO (first in, first out), HIFO (highest in, first out — minimizes gains), and LIFO (last in, first out). FIFO is the default.
+
+A market making bot that trades hundreds or thousands of times is creating hundreds or thousands of taxable events. Manual tracking is infeasible. The tax pipeline is a first-class feature of this project, not an afterthought.
+
+The approach:
+- Every fill is recorded to a JSONL log with all fields needed for Form 8949: timestamp, pair, side, quantity, price, fee, exchange.
+- Paper trades are flagged `is_paper: True` and excluded from tax calculations.
+- The cost basis module (Phase 3) will ingest the log and apply FIFO/HIFO/LIFO accounting.
+- Output will be a Form 8949-compatible CSV and Schedule D summary.
+- All computation is local. No trade data is sent to SaaS tax services — this was an explicit user requirement when they discovered most tax tools are cloud-based.
+
+---
+
+## File map and implementation status
+
+```
+src/
+  __init__.py
+  core/
+    __init__.py
+    avellaneda_stoikov.py     COMPLETE. Pure math. Zero external deps.
+                              ModelParameters, MarketState, QuoteResult dataclasses.
+                              compute_quotes() is a pure function.
+                              inventory_is_at_limit() helper.
+  ml/
+    __init__.py
+    features.py               COMPLETE. Multi-scale feature engineering.
+                              OrderBookSnapshot dataclass.
+                              compute_features() aggregates all three scale groups.
+                              _short_features(), _medium_features(), _long_features() private.
+    drift_estimator.py        COMPLETE (infrastructure). No trained model yet.
+                              DriftEstimator wraps sklearn Ridge pipeline.
+                              Returns 0.0 when no model loaded.
+                              train() and _persist()/_load_if_exists() implemented.
+    regime_classifier.py      COMPLETE (infrastructure). No trained model yet.
+                              RegimeClassifier wraps sklearn RandomForest pipeline.
+                              Returns MarketRegime.RANGING when no model loaded.
+                              MarketRegime enum: RANGING / TRENDING / HIGH_VOLATILITY.
+  tax/
+    __init__.py
+    trade_logger.py           COMPLETE. Append-only JSONL log.
+                              TradeRecord frozen dataclass — all Form 8949 fields.
+                              TradeSide(str, Enum) for clean JSON serialization.
+                              TradeLogger is thread-safe via threading.Lock.
+                              read_taxable() filters paper trades automatically.
+
+controllers/
+  __init__.py
+  avellaneda_stoikov_controller.py   IMPLEMENTED WITH KNOWN GAPS (see below).
+                                     AvellanedaStoikovConfig (Hummingbot V2 config class).
+                                     AvellanedaStoikovController (ControllerBase subclass).
+                                     _extract_fee() helper for Hummingbot TradeFee.
+                                     _parse_order_book() converts raw book to OrderBookSnapshot.
+                                     _interval_to_seconds() raises on unknown unit.
+
+scripts/
+  hedge_bot.py                PARTIALLY IMPLEMENTED. Entry point thin wrapper.
+                              HedgeBotConfig and HedgeBot classes exist.
+                              init_markets() is a no-op — needs wiring (see gaps).
+
+conf/scripts/
+  conf_hedge_bot_1.yml.example   Config template. Copy to conf_hedge_bot_1.yml to run.
+
+tests/
+  __init__.py
+  core/__init__.py             EMPTY — unit tests not yet written.
+  ml/__init__.py               EMPTY
+  tax/__init__.py              EMPTY
+
+.cursor/rules/
+  project-context.mdc          Cursor rule: always read DEVELOPMENT.md first.
+  update-dev-state.mdc         Cursor rule: update DEVELOPMENT.md proactively.
 ```
 
 ---
 
-## Architecture decisions (with reasoning)
+## Architecture decisions with full reasoning
 
-**Pure math lives in `src/core/`, controller is the only Hummingbot file.**
-Separating math from framework means the A-S model can be unit tested and backtested without installing Hummingbot. This was validated when a critical bug was found (see below) that would have been caught earlier by unit tests.
+### `src/core/` has zero framework dependencies
 
-**ML models fall back to safe defaults when untrained.**
-`DriftEstimator.predict()` returns 0.0 (zero drift), `RegimeClassifier.predict()` returns RANGING when no model file exists. The system runs correctly from day one with no ML data. This is intentional — collect paper trading data first, then train.
+The Avellaneda-Stoikov math in `src/core/avellaneda_stoikov.py` imports only the Python standard library (`math`, `dataclasses`). It has no knowledge of Hummingbot, pandas, numpy, or anything else.
 
-**Multi-scale features: long lookback windows, short prediction horizon.**
-Features span seconds (microstructure) through days (trend), but the *output* of the drift estimator is always short-horizon. Long-window features are contextual inputs to a short-horizon prediction, not a horizon mismatch. This is the key design point.
+**Why:** The pure math module can be unit tested, backtested, and reasoned about entirely independently of the trading infrastructure. When a critical bug was found in the variance_term calculation (see below), it could be identified and fixed in isolation. If the math lived inside the Hummingbot controller, testing it would require mocking the entire exchange connector stack.
 
-**JSONL trade log is append-only.**
-Immutable audit trail. Each line is self-contained for cost basis calculation. Paper trades are flagged and excluded from tax output.
+**Invariant to preserve:** Never add framework imports to `src/core/`. If you need numpy in the math, reconsider whether the computation belongs there or in the controller/features module.
 
-**`TradeSide` is a `str` Enum.**
-Serializes cleanly to JSON without a custom encoder. Important for the JSONL log.
+### Controller is the only file that imports Hummingbot
+
+`controllers/avellaneda_stoikov_controller.py` is the integration boundary. It imports from Hummingbot and from our `src/` modules. Nothing else imports Hummingbot.
+
+**Why:** This isolates all framework coupling to one file. If Hummingbot's API changes (it has changed significantly between V1 and V2), only the controller needs updating. The math, ML, and tax modules are unaffected.
+
+**The `HUMMINGBOT_AVAILABLE` flag:** The controller wraps Hummingbot imports in a try/except and sets a flag. This allows the module to be imported in tests without a full Hummingbot install, which matters because setting up Hummingbot in a CI environment is non-trivial. The `AvellanedaStoikovConfig` class is only defined when Hummingbot is available, which creates a test-time limitation (the config class doesn't exist) that has not yet been resolved.
+
+### ML models are infrastructure-ready but untrained
+
+The `DriftEstimator` and `RegimeClassifier` classes have fully implemented training and persistence pipelines, but no trained model files exist. This is intentional, not an oversight.
+
+**Why:** Training requires labeled data — (feature_vector, realized_drift) pairs for the drift estimator, and (feature_vector, regime_label) pairs for the classifier. The only valid source of this data for our specific trading pair, exchange, and time of day is live market data collected by the running bot. Synthetic data or data from a different exchange might produce a model that looks good in validation but fails live.
+
+The workflow is: run paper trading → collect feature/label pairs → train → deploy. This cannot be shortcut. The fact that the models fall back to safe defaults means paper trading can begin immediately to start collecting data.
+
+### `TradeSide` inherits from both `str` and `Enum`
+
+```python
+class TradeSide(str, Enum):
+    BUY = "buy"
+    SELL = "sell"
+```
+
+**Why:** When `asdict()` serializes a `TradeRecord` to a dict for JSON, standard Enum values become their Python object representation, not a string. By inheriting from `str`, `TradeSide.BUY` serializes as `"buy"` directly without needing a custom JSON encoder. This is important because the JSONL log must be human-readable and machine-parseable without any special deserialization logic.
+
+### JSONL (newline-delimited JSON) for the trade log
+
+Each line in `logs/trades.jsonl` is a complete, self-contained JSON object representing one trade.
+
+**Why:** 
+- Append-only: a single `f.write(line)` call is the only operation. No record is ever modified or deleted.
+- Auditable: the file is the ground truth. If cost basis accounting produces a surprising result, you can open the file and read individual trades.
+- Self-contained: each line has everything needed to reconstruct cost basis without cross-referencing other records. This matters because the IRS cares about acquisition date and price for each specific lot.
+- Thread-safe: the `threading.Lock` in `TradeLogger` ensures no two threads can write simultaneously and corrupt a line.
+
+### `frozen=True` on dataclasses
+
+`ModelParameters`, `MarketState`, and `QuoteResult` are all frozen dataclasses. `TradeRecord` is also frozen.
+
+**Why:** These objects represent snapshots — a model configuration at a point in time, a market state at a point in time, a trade that happened. They should not be mutable. Freezing them makes them hashable, prevents accidental in-place modification, and makes the data flow explicit: you don't modify a `QuoteResult`, you compute a new one.
+
+### `compute_quotes()` is a pure function
+
+It takes a `ModelParameters` and `MarketState` and returns a `QuoteResult`. No state, no side effects, no I/O.
+
+**Why:** Pure functions are trivially testable (`assert compute_quotes(params, state).bid == expected`), safely callable from multiple threads, and trivially usable in backtesting without any mocking. The controller handles state; the math handles computation.
+
+### Config lives in YAML, not hardcoded
+
+The `AvellanedaStoikovConfig` Pydantic model serializes to and from YAML via Hummingbot's config system. All strategy parameters (gamma, kappa, time_horizon, order size, etc.) are configurable without code changes.
+
+**Why:** The model parameters (especially gamma, kappa, and order size) will need to be tuned during paper trading. Being able to change them by editing a YAML file and restarting — rather than changing code — makes the tuning loop much faster and safer.
 
 ---
 
-## Bugs found and fixed (do not re-introduce)
+## Bugs found and fixed — do not re-introduce
 
-**variance_term unit bug (critical):**
-`variance_term` must use `seconds_remaining = time_remaining * params.time_horizon`, not just `time_remaining`. Volatility is per-second, so `σ²*(T-t)` requires actual seconds. Using the normalized [0,1] ratio made spreads ~3600x too narrow on a 1-hour session. Fixed in `avellaneda_stoikov.py`.
+### variance_term unit mismatch (critical)
 
-**`_interval_to_seconds` silent fallback:**
-Previously fell back to 60s for unrecognized interval units. Now raises `ValueError`. Silently wrong > loudly wrong.
+**What was wrong:** In `compute_quotes()`, the variance term was computed as:
+```python
+variance_term = params.gamma * (state.volatility ** 2) * time_remaining
+```
+where `time_remaining` is a normalized [0, 1] ratio (fraction of session remaining).
 
-**`TrailingStop` unused import in controller:**
-Removed. Was imported but never referenced.
+**Why this was wrong:** `state.volatility` is expressed in units of **price per second** (σ per second). The A-S formula requires `σ² * (T-t)` where `T-t` is in **seconds**. Using a normalized [0, 1] ratio introduces a factor of `1/time_horizon` error. For a 3600-second session at `time_remaining = 1.0`, the variance term was 3600x too small, making spreads dramatically too narrow.
 
-**`from dataclasses import replace` dead code in controller:**
-Was imported inside `determine_executor_actions` but not used — `QuoteResult(...)` is constructed directly. Removed.
+**What a too-narrow spread means in practice:** The bot would post quotes almost at the mid-price. Every informed trader who knows the price is about to move would immediately fill both sides. The bot would be systematically picked off with no spread revenue to compensate, bleeding money on every fill.
 
-**Fee extraction:**
-Original code assumed `trade_fee.percent * amount * price`. Hummingbot's `TradeFee` can represent fees as either flat fees or percentages. Replaced with `_extract_fee()` helper that handles both forms.
+**The fix:**
+```python
+seconds_remaining = time_remaining * params.time_horizon
+variance_term = params.gamma * (state.volatility ** 2) * seconds_remaining
+```
+
+The `drift_contribution` was already written correctly: `state.drift * seconds_remaining` (drift in price/second × seconds remaining = price contribution). Both terms now have consistent units.
+
+### `_interval_to_seconds` silent fallback
+
+**What was wrong:**
+```python
+return value * units.get(unit, 60)  # silently returned 60 for unknown units
+```
+
+**Why this was dangerous:** An unrecognized interval like `"1w"` (weekly) would silently compute volatility as if candles were 60 seconds long, producing a dramatically wrong volatility estimate with no indication anything was wrong.
+
+**The fix:** Now raises `ValueError` with a descriptive message naming the invalid unit and listing valid options.
+
+### Unused imports and dead code in controller
+
+- `TrailingStop` was imported from Hummingbot but never used.
+- `from dataclasses import replace` was imported inside `determine_executor_actions()` but `replace()` was never called — `QuoteResult(...)` is constructed directly. Dead import inside a method body.
+- Both removed.
+
+### Silent inventory fetch failure
+
+**What was wrong:**
+```python
+except Exception:
+    return 0.0
+```
+
+**Why this was dangerous:** If the connector temporarily fails to return a balance, the bot believes it has zero inventory. The inventory limit check (`inventory_is_at_limit()`) would then incorrectly allow orders that could breach the real position limit.
+
+**The fix:** Exception is now logged with a warning message explaining what happened and that the 0.0 fallback may cause inaccurate inventory limits.
+
+### Fee extraction assumed simple percentage
+
+**What was wrong:** Fee was computed as `trade_fee.percent * fill_event.amount * fill_event.price`. This assumes the fee is always a percentage of the trade's notional value, which is one of two representations Hummingbot uses.
+
+**Why this was wrong:** Hummingbot's `TradeFee` can represent fees as either:
+1. `flat_fees`: a list of `(token, amount)` pairs — a fixed fee amount in a specific asset (e.g. 0.0001 BNB)
+2. `percent + percent_token`: a percentage of trade value in a specific token
+
+The original code would produce incorrect fee amounts when flat fees were used (very common on Binance when BNB fee discounts are active).
+
+**The fix:** `_extract_fee()` helper function handles both cases. It prefers `flat_fees` when present (exact), falls back to `percent` (approximate, since we don't have the exact fill notional in that code path).
+
+### `pyproject.toml` wrong build backend
+
+**What was wrong:** `build-backend = "setuptools.backends.legacy:build"` — this path does not exist.
+**The fix:** `build-backend = "setuptools.build_meta"` — the correct setuptools build backend.
+
+### Removed unused dependencies
+
+- `scipy` was listed as a dependency but is not used anywhere in the codebase. Removed.
+- `jinja2` was listed as a core dependency but is only needed for Phase 3 tax form generation which is not yet implemented. Moved to `[project.optional-dependencies.tax]`.
+- `pyyaml` was listed but Hummingbot handles YAML config internally. Removed.
 
 ---
 
-## Known gaps (must be resolved before live trading)
+## Known gaps — must be resolved before live trading
 
-**Order cancellation in `determine_executor_actions`.**
-The controller creates new orders every tick but does not cancel stale ones from the previous tick. This would accumulate open orders indefinitely. A `StopExecutorAction` for each active executor must be issued before creating new ones. The correct implementation requires testing against the installed Hummingbot version to understand the executor lifecycle API — do not guess at this. See the TODO comment in `determine_executor_actions`.
+### Order cancellation (most critical architectural gap)
 
-**`on_order_filled` hook may not fire automatically.**
-In Hummingbot V2, fill events route through the executor framework, not directly to controller methods. Verify whether `on_order_filled` on the controller is actually called, or whether fills need to be captured differently.
+**The problem:** `determine_executor_actions()` creates new bid and ask executors every tick but never cancels existing ones. Each tick adds two more open orders. After 10 minutes of 1-second ticks, there are 1200 open orders. This would cause the exchange to rate-limit the bot and then likely flag the account.
 
-**`scripts/hedge_bot.py` not fully wired.**
-The `HedgeBot` class inherits `StrategyV2Base` but `init_markets` is a no-op and the controller is not explicitly instantiated. This needs to be completed once Hummingbot is installed and the V2 wiring pattern is confirmed.
+**Why it's not fixed yet:** In Hummingbot V2, the correct way to cancel executors is to issue `StopExecutorAction` for each active executor's ID. The IDs of active executors are accessible via `self.executors_info`. However, the exact lifecycle — when an executor is considered "active" vs "filled" vs "cancelled" — needs to be verified against the running Hummingbot version before implementation. Guessing at this incorrectly could cause the bot to cancel orders that are mid-fill.
+
+**What to do:** After installing Hummingbot and getting connectivity working, read the executor lifecycle documentation and look at existing V2 strategy examples (particularly `v2_with_controllers.py` in the Hummingbot repo). Then implement stale executor cancellation in `determine_executor_actions()` using `StopExecutorAction`.
+
+**There is a prominent TODO comment in the code pointing to this gap.**
+
+### `on_order_filled` hook may not fire on the controller
+
+**The problem:** In Hummingbot V2's executor model, fill events are processed by executors, not delivered directly to controller methods. The `on_order_filled` method on `AvellanedaStoikovController` may never actually be called by the framework.
+
+**What to do:** When Hummingbot is installed, verify this by adding a log statement to `on_order_filled` and placing a paper trade. If it doesn't fire, fills need to be captured by listening to Hummingbot's event bus or by reading executor state after fills complete.
+
+### `scripts/hedge_bot.py` not fully wired
+
+**The problem:** `HedgeBot.init_markets()` is a no-op. The controller is imported but not instantiated in the script. The V2 wiring pattern for connecting a script to a controller via the `controllers_config` field needs to be confirmed against the actual framework.
+
+**What to do:** After Hummingbot is installed, look at `v2_with_controllers.py` in the Hummingbot scripts directory for the canonical wiring pattern and replicate it.
+
+### No unit tests
+
+**The problem:** The entire `tests/` tree is empty `__init__.py` files. The variance_term bug (the most critical bug found) was caught by manual code review, not by a test. If it had been caught by a test, it would have been caught earlier and with more precision.
+
+**What to do:** Write tests for `src/core/avellaneda_stoikov.py` first. Key test cases:
+- Zero inventory, zero drift: bid and ask should be symmetric around mid-price
+- Positive inventory: bid should be below mid, ask should be above but bid closer to mid (skewed to sell)
+- Negative inventory: opposite skew
+- Zero time remaining: should return max-spread quotes
+- `inventory_is_at_limit()` boundary conditions
+- Verify units: at a 1-hour session (time_horizon=3600), the spread should scale appropriately with volatility
+
+### `AvellanedaStoikovConfig` unavailable in tests
+
+`AvellanedaStoikovConfig` is only defined inside `if HUMMINGBOT_AVAILABLE:`. In a test environment without Hummingbot installed, the class doesn't exist, which makes it impossible to construct a controller for testing. This needs a clean resolution — possibly a test-only mock config that satisfies the same interface.
 
 ---
 
@@ -82,20 +489,27 @@ The `HedgeBot` class inherits `StrategyV2Base` but `init_markets` is a no-op and
 
 | Phase | Description | Status |
 |---|---|---|
-| 1 | Hummingbot setup, paper trading, CEX testnet connectivity, trade logging | In progress |
-| 2 | Avellaneda-Stoikov strategy — resolve order cancellation gap, verify fill hook | Pending |
-| 3 | Tax pipeline: cost basis accounting (FIFO/HIFO/LIFO) and Form 8949 export | Pending |
-| 4 | ML training loop: accumulate paper trading data, train drift + regime models | Pending |
-| 5 | Backtesting framework and historical validation | Pending |
-| 6 | Live deployment with hard position limits and kill switches | Pending |
+| 1 | Project structure, core A-S math, ML infrastructure, trade logger, Hummingbot controller scaffold | Complete |
+| 1b | Unit tests for core math; verify Hummingbot connectivity; resolve order cancellation gap | In progress |
+| 2 | Full Avellaneda-Stoikov strategy running in paper trading mode, fills logging correctly | Pending |
+| 3 | Tax pipeline: cost basis accounting (FIFO/HIFO/LIFO), Form 8949 export, Schedule D summary | Pending |
+| 4 | ML training loop: collect paper trading data, train drift estimator and regime classifier, integrate | Pending |
+| 5 | Backtesting framework: replay historical candle data through the full strategy stack | Pending |
+| 6 | Live deployment: hard position limits, kill switches, monitoring, gradual capital rollout | Pending |
 
 ---
 
-## Immediate next steps
+## Immediate next steps (in priority order)
 
-1. Write unit tests for `src/core/avellaneda_stoikov.py` — the variance_term bug was only found in review, not by tests. Tests would catch it first next time.
-2. Install Hummingbot and run the controller against Binance paper trade to confirm connectivity and the executor lifecycle.
-3. Resolve the order cancellation gap once the executor API is confirmed.
+1. **Write unit tests for `src/core/avellaneda_stoikov.py`.** This is the highest priority. The variance_term bug should have been caught by a test. Tests in `tests/core/test_avellaneda_stoikov.py`.
+
+2. **Install Hummingbot and test paper trading connectivity.** Follow the Hummingbot V2 install guide. Configure for Binance paper trade. Run the hedge_bot script and confirm orders are placed.
+
+3. **Verify executor lifecycle and implement order cancellation.** Read `executors_info` in a running V2 strategy. Implement `StopExecutorAction` for stale executors before creating new ones.
+
+4. **Verify `on_order_filled` and fix fill capture if needed.** Place a paper trade manually and confirm whether the fill reaches `on_order_filled` on the controller.
+
+5. **Complete `scripts/hedge_bot.py` wiring** once the V2 controller-to-script pattern is confirmed.
 
 ---
 
@@ -103,4 +517,4 @@ The `HedgeBot` class inherits `StrategyV2Base` but `init_markets` is a no-op and
 
 | Date | What happened |
 |---|---|
-| 2026-04-25 | Initial project setup. Implemented all Phase 1 files. Code review pass found and fixed variance_term bug, unused imports, silent exception in inventory fetch, fee extraction, wrong pyproject.toml build backend, scipy removed. Order cancellation gap identified and documented. |
+| 2026-04-25 | Initial project. Discussed market making vs directional trading, A-S vs Black-Scholes, ML architecture, stablecoins/inventory, CEX vs DEX, Python performance. Implemented all Phase 1 files. Code review found and fixed: variance_term unit bug (critical), _interval_to_seconds silent fallback, unused imports (TrailingStop, field, Optional, dead dataclasses.replace), silent inventory exception, wrong fee extraction, wrong pyproject.toml build backend, removed scipy and jinja2 from core deps. Identified order cancellation gap and on_order_filled uncertainty. Created DEVELOPMENT.md and Cursor rules for session continuity. |

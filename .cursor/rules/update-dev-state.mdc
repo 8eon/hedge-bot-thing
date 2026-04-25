@@ -1,0 +1,34 @@
+---
+description: Keep DEVELOPMENT.md current throughout every session
+alwaysApply: true
+---
+
+# Keeping DEVELOPMENT.md Current
+
+DEVELOPMENT.md is the project memory. Update it proactively — not just at session end — whenever any of the following happen:
+
+## Update immediately when:
+
+- A bug is found (add to "Bugs found and fixed" with full explanation of what was wrong, why it was dangerous, and what the fix was)
+- A bug is fixed (confirm it's documented with enough detail that a future agent won't re-introduce it)
+- An architecture decision is made or changed (add reasoning — the "why" matters more than the "what")
+- A known gap is resolved (move it out of the gaps section and into the session log)
+- A new known gap is discovered (add it to the gaps section immediately)
+- A design discussion produces a conclusion (e.g. user agrees on an approach — capture it)
+- A file is created, significantly changed, or deleted (update the file map and status)
+- A phase of the roadmap is completed or started
+- Any understanding is reached that a new context would need to do good work
+
+## What good documentation looks like:
+
+- Bugs: what was wrong, what incorrect behavior it caused, why it was dangerous, the exact fix
+- Decisions: the options considered, the reasoning for the choice made, what would invalidate it
+- Gaps: specific description of the problem, why it's not fixed yet, what to do when fixing it
+- Rationale: enough context that someone who wasn't in the conversation understands why
+
+## What not to do:
+
+- Do not summarize or compress. Detail is the point.
+- Do not omit reasoning to save space. The "why" is more valuable than the "what."
+- Do not defer updates to "the end of the session." Context may be lost before then.
+- Do not add session log entries for trivial changes (formatting fixes, typo corrections).
