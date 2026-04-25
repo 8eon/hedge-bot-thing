@@ -252,10 +252,12 @@ The three feature groups in `src/ml/features.py`:
 **Short-horizon features (seconds to ~5 minutes):**
 - Order book depth imbalance (signed ratio of bid vs ask volume in top N levels)
 - Trade flow directional skew (taker buy volume as fraction of total volume)
-- Short-window price return
+- Short-window simple return
 - Short-window volatility
 - Bid/ask spread in basis points
 - Volume acceleration (current candle volume vs recent average)
+- **Bar portion** (mean of `(close - low) / (high - low)` over the window; near 1.0 = bullish, near 0.0 = bearish, 0.5 = neutral fallback; OHLCV only, no book required; source: Stoikov et al. 2024, SSRN 5066176)
+- **Spread timing** (`current_spread_bps / rolling_mean_candle_range_bps - 1`; negative = spread tighter than norm = order flow signals more reliable and persistent; IC increases 0.080→0.104 over time, unlike every other signal; rolling mean approximated from candle high-low ranges)
 
 **Medium-horizon features (minutes to ~1 hour):**
 - VWAP deviation (current price relative to volume-weighted average)
@@ -340,6 +342,8 @@ src/
                               OrderBookSnapshot dataclass.
                               compute_features() aggregates all three scale groups.
                               _short_features(), _medium_features(), _long_features() private.
+                              Short features include bar_portion and spread_timing.
+                              All private functions have full docstrings.
     drift_estimator.py        COMPLETE (infrastructure). No trained model yet.
                               DriftEstimator wraps sklearn Ridge pipeline.
                               Returns 0.0 when no model loaded.
@@ -772,22 +776,19 @@ The user's Docker Desktop was previously running Open WebUI and related containe
 
 These are the exact tasks to work on next, in this order. Do not skip ahead.
 
-1. **Add Spread Timing feature to `src/ml/features.py`.**
-   In `_short_features()`, add a new feature: `spread_timing = current_spread_bps / rolling_mean_spread_bps - 1`. Compute `rolling_mean_spread_bps` as the mean of spread_bps over the short window candles. When this value is negative (spread is tighter than normal), the order flow imbalance signal is more reliable and persistent. Research (Delphi Alpha Jan 2026) shows this is the only signal whose predictive IC *increases* over time (0.080 at 10s → 0.104 at 120s). We are not computing it currently. Add it, make sure it serializes cleanly to the feature dict, and update the docstring.
-
-2. **Do the first Docker run and fix whatever breaks.**
+1. **Do the first Docker run and fix whatever breaks.**
    The Docker image is already pulled (`hummingbot/hummingbot:version-2.13.0`). The config file already exists (`conf/scripts/conf_hedge_bot_1.yml`). Run `docker compose run --rm hedge-bot` from the repo root. Type `dev` for the config password. Then inside Hummingbot run `start --v2 conf/scripts/conf_hedge_bot_1.yml`. Observe errors. The likely failures are: (a) script wiring in `hedge_bot.py` is incomplete, (b) import errors for our src modules. Fix them as they appear.
 
-3. **Resolve script wiring in `scripts/hedge_bot.py`.**
+2. **Resolve script wiring in `scripts/hedge_bot.py`.**
    The current file is a stub. Look at Hummingbot's `v2_with_controllers.py` example inside the running container at `/home/hummingbot/scripts/` to see the canonical V2 controller-to-script wiring pattern, then replicate it.
 
-4. **Verify executor lifecycle and implement order cancellation.**
+3. **Verify executor lifecycle and implement order cancellation.**
    Critical architectural gap — the controller creates new orders every tick but never cancels stale ones. Read the executor API from a running strategy, then implement `StopExecutorAction` for stale orders before creating new ones in `determine_executor_actions`.
 
-5. **Verify `on_order_filled` fires on the controller.**
+4. **Verify `on_order_filled` fires on the controller.**
    Place a paper trade and check logs. If it doesn't fire, capture fills via executor state or event bus instead.
 
-6. **Write unit tests for `src/core/avellaneda_stoikov.py`.**
+5. **Write unit tests for `src/core/avellaneda_stoikov.py`.**
    The variance_term bug was caught by review, not tests. Tests in `tests/core/test_avellaneda_stoikov.py`.
 
 ---
@@ -797,3 +798,4 @@ These are the exact tasks to work on next, in this order. Do not skip ahead.
 | Date | What happened |
 |---|---|
 | 2026-04-25 | Initial project. Discussed market making vs directional trading, A-S vs Black-Scholes, ML architecture, stablecoins/inventory, CEX vs DEX, Python performance. Implemented all Phase 1 files. Code review found and fixed: variance_term unit bug (critical), _interval_to_seconds silent fallback, unused imports, silent inventory exception, wrong fee extraction, wrong pyproject.toml build backend, removed scipy and jinja2 from core deps. Identified order cancellation gap and on_order_filled uncertainty. Created DEVELOPMENT.md and Cursor rules for session continuity. Added Docker setup (docker-compose.yml, volume mounts, PYTHONPATH). Cleaned Docker Desktop of all previous containers/images. Hummingbot image pull started but may not have completed at session end — re-run `docker compose pull` to confirm. |
+| 2026-04-25 | New session (context reset). Added `bar_portion` and `spread_timing` to `_short_features()` in `src/ml/features.py`. Self-review found and fixed: "Log-return" docstring mismatch (code computed simple return), missing docstrings on `_medium_features` and `_long_features`, misleading `compute_features` docstring re: NaN fill behavior for domain-specific defaults. File map status for `features.py` updated to reflect new features. Spread timing task removed from next-steps list. |

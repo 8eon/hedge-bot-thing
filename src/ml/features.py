@@ -91,8 +91,10 @@ def compute_features(
     Returns
     -------
     dict[str, float]
-        Flat feature dict. All values are finite floats. NaN values are filled
+        Flat feature dict. All values are finite floats. NaN values are replaced
         with 0.0 so the estimator always receives a complete input vector.
+        Features with domain-specific neutral defaults (e.g. bar_portion → 0.5)
+        pre-fill before this pass and are preserved because they are finite.
     """
     features: dict[str, float] = {}
 
@@ -109,8 +111,34 @@ def _short_features(
     order_book: OrderBookSnapshot,
     window: int,
 ) -> dict[str, float]:
+    """
+    Short-horizon features derived from recent candles and a live order book snapshot.
+
+    Features:
+        short_return:          Simple return over the short window: close[-1]/close[0] - 1.
+        short_volatility:      Std dev of per-candle returns over the window.
+        order_book_imbalance:  Signed bid/ask depth ratio at top 5 levels. Range [-1, 1].
+        spread_bps:            Current live bid-ask spread in basis points.
+        trade_flow_skew:       Mean taker-buy fraction minus 0.5 (requires taker_buy_volume
+                               column; 0.0 if unavailable).
+        volume_acceleration:   Last candle volume relative to the window mean minus 1.
+        bar_portion:           Mean of (close - low) / (high - low) over the window.
+                               Near 1.0 = price closed near high (bullish pressure).
+                               Near 0.0 = price closed near low (bearish pressure).
+                               Fallback 0.5 (neutral). No order book data required.
+                               Source: Stoikov et al. (2024), SSRN 5066176.
+        spread_timing:         current_spread_bps / rolling_mean_candle_range_bps - 1.
+                               Negative = spread is tighter than its recent norm, which
+                               makes order flow signals more reliable and persistent.
+                               rolling_mean is approximated from candle high-low ranges
+                               (the only intracandle spread proxy available from OHLCV).
+                               IC increases over time when this is negative (Delphi Alpha,
+                               Jan 2026), unlike every other signal.
+    """
     recent = candles.iloc[-window:]
     close = recent["close"]
+    high = recent["high"]
+    low = recent["low"]
     volume = recent["volume"]
 
     buy_volume = recent.get("taker_buy_volume", pd.Series(dtype=float))
@@ -122,21 +150,55 @@ def _short_features(
         else 0.0
     )
 
+    # Bar portion: where did the close land within the candle's range?
+    # NaN-safe: candles where high == low are excluded from the mean.
+    candle_range = (high - low).replace(0, float("nan"))
+    bp_mean = ((close - low) / candle_range).mean()
+    bar_portion = float(bp_mean) if np.isfinite(bp_mean) else 0.5
+
+    # Spread timing: current live spread vs the rolling mean of candle ranges.
+    # The candle high-low range in bps is the best available proxy for the
+    # typical bid-ask spread over each candle period when no book history exists.
+    current_spread_bps = (
+        (order_book.best_ask - order_book.best_bid) / order_book.mid_price * 1e4
+    )
+    mid_approx = ((high + low) / 2).replace(0, float("nan"))
+    rolling_mean_range_bps = float(((high - low) / mid_approx * 1e4).mean())
+    spread_timing = (
+        current_spread_bps / rolling_mean_range_bps - 1.0
+        if rolling_mean_range_bps > 0
+        else 0.0
+    )
+
     return {
         "short_return": (close.iloc[-1] / close.iloc[0] - 1) if len(close) > 1 else 0.0,
         "short_volatility": close.pct_change().std(),
         "order_book_imbalance": order_book.depth_imbalance(levels=5),
-        "spread_bps": (order_book.best_ask - order_book.best_bid) / order_book.mid_price * 1e4,
+        "spread_bps": current_spread_bps,
         "trade_flow_skew": float(trade_flow_skew),
         "volume_acceleration": (
             volume.iloc[-1] / volume.iloc[:-1].mean() - 1
             if volume.iloc[:-1].mean() > 0
             else 0.0
         ),
+        "bar_portion": bar_portion,
+        "spread_timing": float(spread_timing),
     }
 
 
 def _medium_features(candles: pd.DataFrame, window: int) -> dict[str, float]:
+    """
+    Medium-horizon features (minutes to ~1 hour).
+
+    Features:
+        medium_vwap_deviation:    Current price minus VWAP, normalized by VWAP.
+        medium_momentum_quarter:  Return over the last window/4 candles.
+        medium_momentum_half:     Return over the last window/2 candles.
+        medium_momentum_full:     Return over the full medium window.
+        medium_volatility:        Std dev of per-candle returns over the window.
+        medium_volume_trend:      Recent quarter-window mean volume vs full-window
+                                  mean volume minus 1. Positive = volume picking up.
+    """
     recent = candles.iloc[-window:]
     close = recent["close"]
     volume = recent["volume"]
@@ -166,6 +228,21 @@ def _medium_features(candles: pd.DataFrame, window: int) -> dict[str, float]:
 
 
 def _long_features(candles: pd.DataFrame, window: int) -> dict[str, float]:
+    """
+    Long-horizon features (hours to ~1 day).
+
+    These are contextual features. They tell the model whether the current
+    microstructure noise is occurring inside a sustained trend (weight signals
+    more heavily) or a ranging market (expect mean reversion). They do not
+    directly predict short-horizon drift — they condition the other features.
+
+    Features:
+        long_trend_return:  Total return over the long window.
+        long_trend_slope:   Linear regression slope normalized by mean price.
+                            Positive = sustained uptrend, negative = downtrend.
+        long_above_sma:     1.0 if current price is above the long-window SMA,
+                            0.0 otherwise.
+    """
     recent = candles.iloc[-window:]
     close = recent["close"]
 
