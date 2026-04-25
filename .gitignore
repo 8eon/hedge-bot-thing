@@ -13,8 +13,10 @@ env/
 
 # Hummingbot generated configs (contain API keys — never commit)
 conf/scripts/*.yml
+conf/controllers/*.yml
 conf/*.yml
 !conf/scripts/*.yml.example
+!conf/controllers/*.yml.example
 
 # Runtime directories populated by Docker / Hummingbot
 logs/

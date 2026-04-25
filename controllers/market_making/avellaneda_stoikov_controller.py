@@ -8,13 +8,14 @@ order management and data feed systems. Its responsibilities:
   2. Compute multi-scale features and request drift/regime estimates from the ML layer.
   3. Call the A-S model to get optimal bid/ask prices.
   4. Translate those prices into Hummingbot ExecutorConfig objects.
-  5. Hand off any fills to the TradeLogger.
+  5. Hand off any completed fills to the TradeLogger.
 
 The controller itself contains no mathematical logic. If you need to understand
 the quote calculation, read src/core/avellaneda_stoikov.py.
 
 Configuration is defined in AvellanedaStoikovConfig and loaded from YAML by
-Hummingbot's --v2 startup path.
+Hummingbot's --v2 startup path. The YAML file must live in conf/controllers/
+and be referenced from the script config's controllers_config list.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from typing import Optional
 import numpy as np
 
 # Allow imports from src/ when running inside Hummingbot's working directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.core.avellaneda_stoikov import (
     MarketState,
@@ -45,10 +46,12 @@ from src.tax.trade_logger import TradeSide, TradeLogger, TradeRecord
 
 try:
     from pydantic import Field
+    from hummingbot.core.data_type.common import MarketDict
     from hummingbot.strategy_v2.controllers.controller_base import (
         ControllerBase,
         ControllerConfigBase,
     )
+    from hummingbot.strategy_v2.executors.data_types import ConnectorPair
     from hummingbot.strategy_v2.executors.position_executor.data_types import (
         PositionExecutorConfig,
     )
@@ -70,93 +73,101 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 if HUMMINGBOT_AVAILABLE:
-    from hummingbot.client.config.config_data_types import ClientFieldData
-
     class AvellanedaStoikovConfig(ControllerConfigBase):
         """
         YAML-configurable parameters for the A-S controller.
-        All numeric parameters can be updated live without restarting.
+
+        Inherits from ControllerConfigBase which provides:
+          id:               Required unique identifier for this controller instance.
+          controller_name:  Module name (must match file name without .py).
+          controller_type:  Directory under controllers/ where this file lives.
+
+        update_markets() registers the connector/pair with Hummingbot so the
+        strategy base knows which exchange connection to initialize.
         """
         controller_name: str = "avellaneda_stoikov_controller"
+        controller_type: str = "market_making"
 
-        exchange: str = Field(
+        connector_name: str = Field(
             default="binance_paper_trade",
-            client_data=ClientFieldData(
-                prompt_on_new=True,
-                prompt=lambda mi: "Exchange connector (e.g. binance_paper_trade): ",
-            ),
+            json_schema_extra={
+                "prompt": "Exchange connector (e.g. binance_paper_trade): ",
+                "prompt_on_new": True,
+            },
         )
         trading_pair: str = Field(
             default="BTC-USDT",
-            client_data=ClientFieldData(
-                prompt_on_new=True,
-                prompt=lambda mi: "Trading pair (e.g. BTC-USDT): ",
-            ),
+            json_schema_extra={
+                "prompt": "Trading pair (e.g. BTC-USDT): ",
+                "prompt_on_new": True,
+            },
         )
         order_amount_quote: Decimal = Field(
             default=Decimal("50"),
-            client_data=ClientFieldData(
-                is_updatable=True,
-                prompt_on_new=True,
-                prompt=lambda mi: "Order size in quote asset (e.g. 50 USDT): ",
-            ),
+            json_schema_extra={
+                "is_updatable": True,
+                "prompt": "Order size in quote asset (e.g. 50 USDT): ",
+                "prompt_on_new": True,
+            },
         )
 
         # Avellaneda-Stoikov model parameters
         gamma: float = Field(
             default=0.1,
             gt=0,
-            client_data=ClientFieldData(
-                is_updatable=True,
-                prompt_on_new=True,
-                prompt=lambda mi: "Risk-aversion gamma (e.g. 0.1): ",
-            ),
+            json_schema_extra={
+                "is_updatable": True,
+                "prompt": "Risk-aversion gamma (e.g. 0.1): ",
+                "prompt_on_new": True,
+            },
         )
         kappa: float = Field(
             default=1.5,
             gt=0,
-            client_data=ClientFieldData(
-                is_updatable=True,
-                prompt_on_new=True,
-                prompt=lambda mi: "Order arrival intensity kappa (e.g. 1.5): ",
-            ),
+            json_schema_extra={
+                "is_updatable": True,
+                "prompt": "Order arrival intensity kappa (e.g. 1.5): ",
+                "prompt_on_new": True,
+            },
         )
         time_horizon_seconds: float = Field(
             default=3600.0,
             gt=0,
-            client_data=ClientFieldData(
-                is_updatable=True,
-                prompt_on_new=False,
-                prompt=lambda mi: "Trading session length in seconds (e.g. 3600): ",
-            ),
+            json_schema_extra={
+                "is_updatable": True,
+                "prompt": "Trading session length in seconds (e.g. 3600): ",
+                "prompt_on_new": False,
+            },
         )
         max_inventory_base: float = Field(
             default=0.01,
             gt=0,
-            client_data=ClientFieldData(
-                is_updatable=True,
-                prompt_on_new=True,
-                prompt=lambda mi: "Max inventory in base asset (e.g. 0.01 BTC): ",
-            ),
+            json_schema_extra={
+                "is_updatable": True,
+                "prompt": "Max inventory in base asset (e.g. 0.01 BTC): ",
+                "prompt_on_new": True,
+            },
         )
-
-        # High-volatility regime spread multiplier
         high_vol_spread_multiplier: float = Field(
             default=3.0,
             gt=1.0,
-            client_data=ClientFieldData(
-                is_updatable=True,
-                prompt_on_new=False,
-                prompt=lambda mi: "Spread multiplier during high-volatility regime: ",
-            ),
+            json_schema_extra={
+                "is_updatable": True,
+                "prompt": "Spread multiplier during high-volatility regime: ",
+                "prompt_on_new": False,
+            },
         )
 
-        # Candle feed configuration (matches StrategyV2ConfigBase format)
+        # Candle feed configuration
         candle_interval: str = Field(default="1m")
         candle_max_records: int = Field(default=1500)  # ~25 hours of 1m candles
 
         # Trade log path
         trade_log_path: str = Field(default="logs/trades.jsonl")
+
+        def update_markets(self, markets: "MarketDict") -> "MarketDict":
+            """Register our connector/pair so the strategy base initializes the connection."""
+            return markets.add_or_update(self.connector_name, self.trading_pair)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +183,7 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
       1. Fetch current candles and order book.
       2. Compute features → get drift estimate + regime label.
       3. Compute optimal quotes via A-S model.
-      4. If quotes changed materially, cancel old executors and create new ones.
+      4. Cancel previous tick's executors, then create new ones if quotes changed.
       5. Log any completed fills to the trade logger.
     """
 
@@ -192,8 +203,17 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
         self._regime_classifier = RegimeClassifier()
         self._trade_logger = TradeLogger(Path(config.trade_log_path))
 
-        # Last computed quotes — used to avoid redundant order cancellations.
+        # Last computed quotes — used to detect meaningful changes before cancelling.
         self._last_quotes: Optional[QuoteResult] = None
+
+        # Initialize rate sources so Hummingbot can resolve price conversions.
+        if HUMMINGBOT_AVAILABLE:
+            self.market_data_provider.initialize_rate_sources([
+                ConnectorPair(
+                    connector_name=config.connector_name,
+                    trading_pair=config.trading_pair,
+                )
+            ])
 
     def _refresh_params(self) -> None:
         """Rebuild ModelParameters from config. Called each tick to pick up live updates."""
@@ -218,7 +238,7 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
     def _get_inventory_base(self) -> float:
         """Return current base asset holdings from the connector."""
         try:
-            connector = self.market_data_provider.get_connector(self.config.exchange)
+            connector = self.market_data_provider.get_connector(self.config.connector_name)
             base_asset = self.config.trading_pair.split("-")[0]
             balance = connector.get_available_balance(base_asset)
             return float(balance)
@@ -236,7 +256,6 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
             return 0.001  # safe fallback
 
         log_returns = np.diff(np.log(closes))
-        # Convert from per-candle to per-second using candle interval.
         candle_seconds = _interval_to_seconds(self.config.candle_interval)
         per_candle_vol = float(np.std(log_returns))
         return per_candle_vol / (candle_seconds ** 0.5)
@@ -244,26 +263,19 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
     def determine_executor_actions(self) -> list["ExecutorAction"]:
         """
         Main entry point called by Hummingbot on each strategy tick.
-        Returns a list of executor actions (create / stop).
-
-        TODO: Before creating new orders, active executors from the previous tick
-        must be stopped. Without this, each tick accumulates more open orders.
-        Implement by calling StopExecutorAction for all active executor IDs tracked
-        in self.executors_info before appending CreateExecutorActions. This requires
-        verifying the exact executor lifecycle API against the installed Hummingbot
-        version before implementing, to avoid cancelling fills mid-execution.
+        Returns a list of executor actions (stop existing + create new).
         """
         self._refresh_params()
 
         try:
             candles_df = self.market_data_provider.get_candles_df(
-                connector_name=self.config.exchange,
+                connector_name=self.config.connector_name,
                 trading_pair=self.config.trading_pair,
                 interval=self.config.candle_interval,
                 max_records=self.config.candle_max_records,
             )
             order_book_raw = self.market_data_provider.get_order_book(
-                connector_name=self.config.exchange,
+                connector_name=self.config.connector_name,
                 trading_pair=self.config.trading_pair,
             )
         except Exception as e:
@@ -293,7 +305,16 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
             )
 
         self._last_quotes = quotes
-        return self._build_executor_actions(quotes, state.inventory, regime)
+
+        # Stop all active executors from the previous tick before placing new ones.
+        # Without this, each tick accumulates open orders indefinitely.
+        actions: list[ExecutorAction] = [
+            StopExecutorAction(executor_id=e.id, controller_id=self.config.id)
+            for e in self.executors_info
+            if e.is_active
+        ]
+        actions.extend(self._build_executor_actions(quotes, state.inventory, regime))
+        return actions
 
     def _build_executor_actions(
         self,
@@ -329,7 +350,7 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
         trade_type = TradeType.BUY if side == "buy" else TradeType.SELL
         config = PositionExecutorConfig(
             timestamp=time.time(),
-            connector_name=self.config.exchange,
+            connector_name=self.config.connector_name,
             trading_pair=self.config.trading_pair,
             side=trade_type,
             entry_price=Decimal(str(round(price, 8))),
@@ -340,7 +361,11 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
     def on_order_filled(self, fill_event) -> None:
         """
         Called by Hummingbot when an order fills. Records the trade to the log.
-        Override point for fill handling.
+
+        NOTE: In Hummingbot V2's executor model, fill events are processed by
+        executors and this method may not be called by the framework directly.
+        Verify by adding a test log statement and placing a paper trade. If it
+        does not fire, fills should be captured via executor state after completion.
         """
         quote_asset = self.config.trading_pair.split("-")[1]
         fee, fee_asset = _extract_fee(fill_event.trade_fee, quote_asset)
@@ -348,7 +373,7 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
         record = TradeRecord(
             trade_id=fill_event.exchange_trade_id,
             timestamp=TradeRecord.now_utc(),
-            exchange=self.config.exchange,
+            exchange=self.config.connector_name,
             trading_pair=self.config.trading_pair,
             side=TradeSide.BUY if fill_event.trade_type.name == "BUY" else TradeSide.SELL,
             base_asset=self.config.trading_pair.split("-")[0],
@@ -358,7 +383,7 @@ class AvellanedaStoikovController(ControllerBase if HUMMINGBOT_AVAILABLE else ob
             fee=fee,
             fee_asset=fee_asset,
             order_id=fill_event.order_id,
-            is_paper="paper" in self.config.exchange.lower(),
+            is_paper="paper" in self.config.connector_name.lower(),
         )
         self._trade_logger.record(record)
 

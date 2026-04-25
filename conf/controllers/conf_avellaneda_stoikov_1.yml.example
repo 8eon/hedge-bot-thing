@@ -1,0 +1,31 @@
+# Avellaneda-Stoikov controller configuration.
+# Copy to conf_avellaneda_stoikov_1.yml and adjust values before running.
+# The .yml files are gitignored; only the .example template is committed.
+
+# Required by Hummingbot's controller loader — do not change these three.
+id: "as_controller_1"
+controller_type: market_making
+controller_name: avellaneda_stoikov_controller
+
+# Exchange and pair
+connector_name: binance_paper_trade
+trading_pair: BTC-USDT
+
+# Order sizing
+order_amount_quote: "50"          # Size of each order in USDT
+
+# Avellaneda-Stoikov model parameters
+gamma: 0.1                        # Risk aversion. Higher = wider spreads, more skewing.
+kappa: 1.5                        # Order arrival intensity. Higher = tighter spreads.
+time_horizon_seconds: 3600.0      # Session window length (1 hour default).
+max_inventory_base: 0.01          # Max BTC holdings before one side is disabled.
+
+# Regime handling
+high_vol_spread_multiplier: 3.0   # Spread multiplier in HIGH_VOLATILITY regime.
+
+# Candle feed
+candle_interval: "1m"
+candle_max_records: 1500          # ~25 hours of 1-minute candles
+
+# Trade log
+trade_log_path: "logs/trades.jsonl"
