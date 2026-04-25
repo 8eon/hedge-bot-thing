@@ -620,6 +620,45 @@ Pairs trading and mean reversion "stopped working" in equities as they got crowd
 
 Academic reading worth doing: Glosten-Milgrom model, Kyle model (limit order book microstructure). Genuine signal there that hasn't been fully industrialized yet.
 
+---
+
+### Research findings (April 2026 — from live literature search, not training data)
+
+**Order flow imbalance — quantified signal decay:**
+
+From Delphi Alpha's Crypto Orderflow Alpha Report (January 2026), analyzing 1-second L2 order book snapshots:
+
+- Queue Imbalance Top1 (ratio of best-bid size to best-ask size): IC = 0.129 at 10s horizon, 0.065 at 60s, 0.023 at 600s. Decays ~50% every 60 seconds. Still significant at 10 minutes.
+- OFI (Order Flow Imbalance — normalized arrivals and cancellations): IC 0.016-0.023. Lower but independent of the imbalance signal. Using both together gives higher combined IC than either alone.
+- **"Spread Timing" signal (underexplored, actionable):** IC *increases* from 0.080 at 10s to 0.104 at 120s. This is the opposite of every other signal. It captures whether spreads are currently tight relative to normal — when spreads are tight, order flow signals persist longer and are more reliable. Implication for us: when spread_bps is low, weight the drift estimate more heavily in the reservation price calculation. We should add this feature explicitly.
+- Deeper book levels (Top10) are more persistent but lower IC. Top1 is the best signal.
+- Simple models (XGBoost, logistic regression) match or exceed CNN+LSTM on LOB data with good feature engineering. Validates our Ridge baseline.
+- Signal is not standalone profitable due to fees (~10bps round-trip). Best used as a feature improving a broader model — exactly what we're doing.
+
+arxiv paper 2602.00776 (Jan 2026, CatBoost across multiple crypto assets 2022-2025): confirms the same SHAP patterns are "remarkably stable cross-asset" — order flow imbalance, spreads, VWAP-to-mid deviations drive predictions consistently across BTC, ETH, and altcoins. Validates that a model trained on BTC transfers to ETH with minimal retraining.
+
+**Funding rate arbitrage — concrete 2025-2026 numbers:**
+
+| Market condition | Single exchange APR | Cross-exchange APY |
+|---|---|---|
+| Strong bull (Q4 2024) | 27.4% | 20-28% |
+| Moderate bull (Q2 2025) | 16-27% | 15-22% |
+| Neutral/ranging | ~11% | 10-15% |
+| Low-vol/bear (early 2026) | 5.5-10% | 8-12% |
+
+18-month backtest (Sept 2022-March 2024): 156% cumulative return, Sharpe ratio 1.42, max drawdown 18% (FTX collapse when funding went deeply negative). Strategy recovered fully.
+
+Critical fee constraint discovered: at 0.025% funding spread with 0.01% fees per side × 4 sides = 0.04% in fees, the strategy is NEGATIVE. At 0.005% fees (VIP tier) it produces 0.004% net per 8h. Fee optimization is not optional for cross-exchange arb — it determines whether the strategy exists at all. Minimum capital $5k-10k per exchange to reach favorable fee tiers.
+
+For SOL, DOGE, and meme coins: funding spreads are 2-3x higher than BTC (SOL averages 0.022%/8h spread, memes 0.045%+). Higher yield but thinner books and execution risk.
+
+**The novel angle: bidirectional funding rate arb with regime detection**
+
+The main risk in funding arb is a funding rate flip (positive → negative), which happened during FTX. The standard strategy takes losses during flips. An enhancement nobody in retail is doing automatically: detect the flip and reverse the position (short spot + long perp instead of long spot + short perp), converting a drawdown into additional yield. Our existing regime classifier is already architecturally positioned to detect this. This is a genuinely underexplored combination.
+
+**Directly relevant paper: "Market Making in Crypto" (SSRN 5066176, Cornell, Dec 2024)**
+Developed a custom alpha signal called "Bar Portion" (BP) running on Hummingbot specifically. Live-traded SOL-USDT, DOGE-USDT, GALA-USDT for 24 hours and outperformed MACD baseline. Worth reading in full — uses our exact infrastructure.
+
 ### Business model and scaling path
 
 **Phase 1 — Prove the strategy (now)**
