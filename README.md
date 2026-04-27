@@ -22,9 +22,9 @@ This project applies quantitative market making techniques — standard practice
 
 The approach is notable for several reasons:
 
-- **Direction-neutral profitability.** Returns are generated from spread capture, not price prediction, making performance consistent across bull and bear market conditions.
+- **Direction-neutral profitability.** Returns are generated from spread capture as opposed to price prediction, making performance consistent across bull and bear market conditions.
 - **Principled risk management.** Inventory exposure is controlled mathematically rather than through ad hoc rules.
-- **ML as a precision tool, not a black box.** Machine learning is scoped to estimating specific model parameters — short-term drift and market regime — rather than making unconstrained trading decisions.
+- **ML as a precision tool for parameter estimation** Machine learning is scoped to estimating specific model parameters — short-term drift and market regime — rather than making unconstrained trading decisions.
 
 ---
 
@@ -110,7 +110,7 @@ A classifier identifies the current market regime — ranging, trending, or high
 | Trending | Aggressive quote skewing; reduced order size |
 | High-volatility | Spread widening; potential quoting suspension |
 
-This prevents the strategy from operating in conditions where market making is structurally unprofitable.
+This helps to prevent the strategy from operating in conditions where market making is structurally unprofitable.
 
 ---
 
@@ -122,20 +122,20 @@ Every executed trade is logged with full metadata required for tax purposes: tim
 - **Form 8949-compatible output** listing each disposal with acquisition date, disposal date, proceeds, and cost basis
 - **Schedule D summary** of short-term and long-term capital gains/losses
 
-All tax computation is performed locally using open source libraries. No trade data is sent to third-party SaaS services.
+All tax computation is performed locally using open source libraries. 
 
 ---
 
 ## Roadmap
 
-| Phase | Description | Status |
+| Phase | Description 
 |---|---|---|
-| 1 | Hummingbot setup, paper trading, CEX testnet connectivity, trade logging | Planned |
-| 2 | Avellaneda-Stoikov strategy implementation | Planned |
-| 3 | Tax pipeline: cost basis accounting and Form 8949 export | Planned |
-| 4 | ML drift estimator and regime classifier | Planned |
-| 5 | Backtesting framework and historical validation | Planned |
-| 6 | Live deployment with position limits and kill switches | Planned |
+| 1 | Hummingbot setup, paper trading, CEX testnet connectivity, trade logging 
+| 2 | Avellaneda-Stoikov strategy implementation 
+| 3 | Tax pipeline: cost basis accounting and Form 8949 export 
+| 4 | ML drift estimator and regime classifier 
+| 5 | Backtesting framework and historical validation 
+| 6 | Live deployment with position limits and kill switches 
 
 ---
 
