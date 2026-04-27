@@ -25,7 +25,6 @@ The approach is notable for several reasons:
 - **Direction-neutral profitability.** Returns are generated from spread capture, not price prediction, making performance consistent across bull and bear market conditions.
 - **Principled risk management.** Inventory exposure is controlled mathematically rather than through ad hoc rules.
 - **ML as a precision tool, not a black box.** Machine learning is scoped to estimating specific model parameters — short-term drift and market regime — rather than making unconstrained trading decisions.
-- **Compliance by design.** Trade logging and cost basis accounting are first-class concerns, not afterthoughts.
 
 ---
 
