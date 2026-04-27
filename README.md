@@ -128,14 +128,14 @@ All tax computation is performed locally using open source libraries.
 
 ## Roadmap
 
-| Phase | Description 
+| Phase | Description |
 |---|---|---|
-| 1 | Hummingbot setup, paper trading, CEX testnet connectivity, trade logging 
-| 2 | Avellaneda-Stoikov strategy implementation 
-| 3 | Tax pipeline: cost basis accounting and Form 8949 export 
-| 4 | ML drift estimator and regime classifier 
-| 5 | Backtesting framework and historical validation 
-| 6 | Live deployment with position limits and kill switches 
+| 1 | Hummingbot setup, paper trading, CEX testnet connectivity, trade logging | 
+| 2 | Avellaneda-Stoikov strategy implementation |
+| 3 | Tax pipeline: cost basis accounting and Form 8949 export |
+| 4 | ML drift estimator and regime classifier |
+| 5 | Backtesting framework and historical validation |
+| 6 | Live deployment with position limits and kill switches |
 
 ---
 
