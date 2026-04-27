@@ -1,6 +1,6 @@
 # hedge-bot-thing
 
-A professional-grade cryptocurrency market making system built on [Hummingbot](https://hummingbot.org/), implementing the Avellaneda-Stoikov model with machine learning-assisted parameter estimation and automated IRS tax reporting.
+A (WIP) professional-grade cryptocurrency market making system built on [Hummingbot](https://hummingbot.org/), implementing the Avellaneda-Stoikov model with machine learning-assisted parameter estimation and automated IRS tax reporting.
 
 ---
 
