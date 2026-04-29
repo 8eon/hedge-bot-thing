@@ -644,6 +644,63 @@ Academic reading worth doing: Glosten-Milgrom model, Kyle model (limit order boo
 
 ---
 
+### Multi-asset HJB extension and hysteresis bands (future architectural upgrade)
+
+**Source:** User encountered a video (specific source not recalled) discussing these ideas as improvements to A-S. Both are documented here because they have meaningful architectural implications and should be implemented deliberately, not improvised.
+
+#### Multi-asset A-S with full covariance matrix
+
+In the standard A-S model every term is scalar: inventory `q`, volatility `σ²`, drift `μ`. The multi-asset generalization replaces these with:
+- Inventory **vector** `q = [q_BTC, q_ETH, ...]`
+- Covariance **matrix** `Σ` (n×n), where `Σ[i,j]` = covariance between asset i and asset j price movements
+- Drift **vector** `μ`
+- Reservation price **vector**: `r = s + μ·(T-t) - γ·Σ·q·(T-t)`
+
+The core computation `γ·Σ·q·(T-t)` is a matrix-vector multiply — O(n²) per tick, trivially fast even in Python for realistic n (2-10 assets).
+
+**Why someone claimed it's "not feasible in real time":** The exact optimal solution requires numerically solving the Hamilton-Jacobi-Bellman (HJB) PDE. In the multi-asset case the state space is (n+1)-dimensional — one inventory dimension per asset plus time. The curse of dimensionality makes direct numerical solution expensive for n > 3. However:
+1. A closed-form approximation analogous to the single-asset A-S approximation exists and is fast.
+2. If the full numerical solution is truly needed, it can be precomputed offline as a lookup table indexed by discretized (q₁, q₂, ..., qₙ, time_remaining) and interpolated at runtime — O(1) per tick. This is the correct engineering response to the "not feasible in real time" claim.
+
+**Why this matters beyond inventory hedging:**
+
+This has *two* distinct benefits, and the second one is the more strategically important:
+
+1. **Cross-asset inventory hedging.** If you're long BTC and BTC-ETH covariance is high, the model will naturally shade your ETH quotes to reduce ETH inventory too, because ETH partially hedges BTC exposure. Capital is deployed more efficiently across a portfolio than running independent single-asset controllers.
+
+2. **Pre-emptive latency arbitrage defense.** This is the critical one. HFT latency arbitrageurs make money by detecting that your resting limit order has become stale — i.e., the true fair price has moved but your quote hasn't updated yet — and hitting it before your cancel lands. The attack window is the milliseconds it takes for the exchange to propagate the price move to your order book.
+
+   The covariance matrix enables a proactive defense: if ETH spikes sharply and BTC-ETH covariance is high, you have a predictive signal that BTC is about to move *before your exchange has updated the BTC mid price*. You can pull or widen your BTC quotes in that window, removing the target before the arb bots can hit it. This converts cross-asset correlation from a risk factor into an active shield against toxic flow.
+
+   Without this, you are purely reactive — you can only update BTC quotes after BTC has already moved on your exchange, which means the latency arb opportunity has already opened.
+
+**Implementation plan (when we get here):**
+- `ModelParameters` gains a covariance matrix field (numpy ndarray, n×n) and a list of assets
+- `MarketState` gains a vector inventory field
+- `compute_quotes()` returns a vector `QuoteResult` — one bid/ask per asset
+- The covariance matrix is estimated from rolling candle data using EWMA (exponentially weighted moving average covariance), which is O(n²) per candle update and requires no window storage
+- The controller watches all correlated assets' order books and mid prices, not just the primary pair
+- The cross-asset early-warning logic lives in the controller, not in the math module
+
+**When to implement:** After single-asset paper trading is validated and profitable. Do not attempt this while the single-asset version is unvalidated — multi-asset adds complexity that makes debugging harder at a stage where the fundamentals need to be confirmed.
+
+#### Hysteresis bands for quote refresh
+
+The standard naive approach cancels and reposts orders every tick whenever the optimal quote changes. This has three problems:
+1. **Cost:** Cancellation and resubmission use API rate limit budget and, on some exchanges, incur fees.
+2. **Visibility:** Constant churn makes the bot's behavior pattern-matchable by observant counterparties.
+3. **Latency arb exposure:** A fast trader who sees your cancel request knows a repost is imminent and can race to fill your old quote before the cancel lands.
+
+**Hysteresis bands** solve this: only cancel and repost when the new optimal quote differs from your currently resting orders by more than a configurable threshold (e.g., 0.5 bps). Moves inside the band are ignored. Only moves that justify the churn cost trigger a refresh.
+
+This is directly complementary to the covariance-based early warning: the band determines when a cross-asset signal is large enough to warrant pulling quotes. Small correlated moves inside the band → ignore. Sharp correlated moves outside the band → pull immediately.
+
+**Implementation:** Straightforward addition to `determine_executor_actions()` in the controller. Before cancelling active executors, compute the distance between current resting order prices and new optimal quotes. If both are within the band, return an empty action list (do nothing). Only cancel when at least one quote has moved outside the band. The band width is a configurable parameter in `AvellanedaStoikovConfig`.
+
+**When to implement:** This is a near-term improvement with no additional capital requirements and fits cleanly into the existing single-asset controller. Good candidate for Phase 1b after the first successful paper trading run.
+
+---
+
 ### Research findings (April 2026 — from live literature search, not training data)
 
 **Order flow imbalance — quantified signal decay:**
@@ -812,3 +869,4 @@ These are the exact tasks to work on next, in this order. Do not skip ahead.
 | 2026-04-25 | Initial project. Discussed market making vs directional trading, A-S vs Black-Scholes, ML architecture, stablecoins/inventory, CEX vs DEX, Python performance. Implemented all Phase 1 files. Code review found and fixed: variance_term unit bug (critical), _interval_to_seconds silent fallback, unused imports, silent inventory exception, wrong fee extraction, wrong pyproject.toml build backend, removed scipy and jinja2 from core deps. Identified order cancellation gap and on_order_filled uncertainty. Created DEVELOPMENT.md and Cursor rules for session continuity. Added Docker setup (docker-compose.yml, volume mounts, PYTHONPATH). Cleaned Docker Desktop of all previous containers/images. Hummingbot image pull started but may not have completed at session end — re-run `docker compose pull` to confirm. |
 | 2026-04-25 | New session (context reset). Added `bar_portion` and `spread_timing` to `_short_features()` in `src/ml/features.py`. Self-review found and fixed: "Log-return" docstring mismatch (code computed simple return), missing docstrings on `_medium_features` and `_long_features`, misleading `compute_features` docstring re: NaN fill behavior for domain-specific defaults. |
 | 2026-04-25 | Full V2 wiring investigation and fix. Root cause: Hummingbot builds module import path as `controllers.{controller_type}.{controller_name}`, so controller must live in a subdirectory. Moved to `controllers/market_making/`. Fixed `AvellanedaStoikovConfig`: added `id`, `connector_name`, `update_markets()`, correct `controller_type`. Fixed `hedge_bot.py`: correct import path, `controllers_config: List[str]`, removed no-op `init_markets`. Created `conf/controllers/` structure. Added `initialize_rate_sources` to controller `__init__`. Resolved order cancellation gap using `StopExecutorAction` for `is_active` executors. All imports verified clean in container. |
+| 2026-04-29 | User returned with research on two architectural improvements: (1) multi-asset HJB extension — replacing scalar inventory/volatility with vector/covariance-matrix to handle correlated assets; key insight is that cross-asset correlation enables pre-emptive latency arbitrage defense (pull BTC quotes when ETH moves, before BTC exchange has updated, closing the HFT attack window); (2) hysteresis bands — only refresh quotes when optimal price moves outside a threshold band, reducing churn, API usage, and latency arb exposure. Both documented in detail in new "Multi-asset HJB extension and hysteresis bands" section under Future strategy research. Priority: hysteresis bands are a near-term single-asset improvement; multi-asset waits until single-asset paper trading is validated. |
